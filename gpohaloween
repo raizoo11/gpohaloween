@@ -6,8 +6,9 @@
     - Setelah sampai di eventDoor, trigger ProximityPrompt di
       eventDoor.Frame.ProximityPrompt selama X detik (bisa diatur di GUI)
       (pakai fireproximityprompt kalau ada, fallback ke InputHoldBegin/End, lalu tombol E)
-    - Deteksi STUN (LocalPlayer.StunFolder.Stun): kena stun (animasi ambil candy /
-      diculik) -> tween & aksi lain di-pause, kontrol fisika dilepas, lanjut setelah stun habis
+    - Deteksi STUN / HIT / RAGDOLL: kena stun (animasi ambil candy / diculik), kena
+      pukul monster (HP turun), atau ragdoll -> tween & aksi lain di-pause, kontrol
+      fisika & noclip dilepas, lanjut setelah semuanya selesai
     - Ngunjungin SEMUA event door yang ada (dihitung otomatis)
     - Tiap door punya COOLDOWN (default 180 detik / 3 menit) sejak dikunjungi.
       Door yang masih cooldown di-skip. Kalau semua door lagi cooldown, script
@@ -873,17 +874,79 @@ local function findNextEventDoor()
     return soonest
 end
 
--- ============ Deteksi STUN ============
--- LocalPlayer.StunFolder.Stun aktif pas karakter lagi kena stun (animasi ambil
--- candy, diculik, dll). Selama stun, script gak boleh maksa gerak: BodyVelocity
--- bakal ngelawan game & watchdog tween salah ngira "nyangkut".
--- Tipe instance "Stun" belum pasti, jadi dicek fleksibel:
---   Bool -> true = stun | Number/Int -> > 0 | String -> gak kosong |
---   Folder/Configuration -> punya child | tipe lain -> ada = stun
+-- ============ Deteksi STUN / HIT / RAGDOLL ============
+-- Selama karakter kena stun (animasi ambil candy, diculik), kena pukul monster,
+-- atau ragdoll, script gak boleh maksa gerak: BodyVelocity bakal ngelawan game,
+-- watchdog tween salah ngira "nyangkut", dan noclip bikin badan ragdoll tembus tanah.
 local STUN_MAX_WAIT = 25 -- detik, batas nunggu stun (pengaman kalau deteksi salah)
 local StunDebugPrinted = false
 
-local function isStunned()
+-- ---- Deteksi kena HIT ----
+-- Begitu HP turun, anggap karakter lagi "kena hit" selama HIT_RELEASE_TIME detik.
+-- Ini nutup celah antara momen kena pukul dan momen StunFolder.Stun ke-replicate,
+-- jadi kontrol fisika & noclip langsung dilepas.
+local HIT_RELEASE_TIME = 1.5
+local LastHitAt = 0
+local HitConn = nil
+
+local function hookHitDetection(hum)
+    if HitConn then HitConn:Disconnect() end
+    if not hum then return end -- jaga-jaga, biar gak error kalau Humanoid belum ada
+    local lastHp = hum.Health
+    HitConn = hum.HealthChanged:Connect(function(hp)
+        if hp < lastHp - 0.01 then
+            LastHitAt = tick()
+        end
+        lastHp = hp
+    end)
+end
+
+if Humanoid then
+    hookHitDetection(Humanoid)
+end
+LocalPlayer.CharacterAdded:Connect(function(char)
+    local hum = char:WaitForChild("Humanoid")
+    LastHitAt = 0
+    hookHitDetection(hum)
+end)
+
+-- ---- Deteksi RAGDOLL ----
+-- Belum pasti GPO nge-ragdoll lewat apa, jadi dicek beberapa cara umum:
+-- Humanoid state (Ragdoll / FallingDown / Physics) atau attribute Ragdoll di Character.
+-- Kalau kedeteksi, state-nya di-print sekali biar kamu bisa lihat/setel.
+local RAGDOLL_STATES = {
+    [Enum.HumanoidStateType.Ragdoll] = true,
+    [Enum.HumanoidStateType.FallingDown] = true,
+    [Enum.HumanoidStateType.Physics] = true,
+}
+local RagdollDebugState = nil
+
+local function isRagdolled()
+    local hum = Humanoid
+    if not hum or not hum.Parent then return false end
+
+    local ok, state = pcall(function() return hum:GetState() end)
+    if ok and RAGDOLL_STATES[state] then
+        if RagdollDebugState ~= state then
+            RagdollDebugState = state
+            print("[AutoEventDoor] Ragdoll terdeteksi, Humanoid state: " .. tostring(state))
+        end
+        return true
+    end
+
+    local char = LocalPlayer.Character
+    if char and (char:GetAttribute("Ragdoll") == true or char:GetAttribute("Ragdolled") == true) then
+        return true
+    end
+
+    return false
+end
+
+-- ---- LocalPlayer.StunFolder.Stun ----
+-- Tipe instance "Stun" belum pasti, jadi dicek fleksibel:
+--   Bool -> true = stun | Number/Int -> > 0 | String -> gak kosong |
+--   Folder/Configuration -> punya child | tipe lain -> ada = stun
+local function isStunFolderActive()
     local folder = LocalPlayer:FindFirstChild("StunFolder")
     local stun = folder and folder:FindFirstChild("Stun")
     if not stun then return false end
@@ -901,6 +964,13 @@ local function isStunned()
         return #stun:GetChildren() > 0
     end
     return true
+end
+
+-- Dianggap "gak boleh dikontrol script" kalau: baru kena hit, lagi ragdoll, atau stun
+local function isStunned()
+    if tick() - LastHitAt < HIT_RELEASE_TIME then return true end
+    if isRagdolled() then return true end
+    return isStunFolderActive()
 end
 
 -- Tunggu sampai stun habis. Return: true kalau tadi sempat stun
@@ -921,7 +991,7 @@ local function waitUntilNotStunned()
 
     StatusExtra = ""
     updateGuiState()
-    task.wait(0.15) -- jeda kecil biar kontrol karakter balik normal
+    task.wait(0.4) -- jeda biar karakter beneran udah berdiri / kontrol balik normal
     return true
 end
 
@@ -1366,8 +1436,8 @@ local function tweenToPoint(targetPos, timeout, forceNoclip)
     while Enabled and (tick() - startTime) < timeout do
         if not root.Parent then break end
 
-        -- STUN: lepas kontrol fisika (biar gak ngelawan game / animasi diculik),
-        -- pause tween, lalu lanjut setelah stun habis.
+        -- STUN / HIT / RAGDOLL: lepas kontrol fisika (biar gak ngelawan game /
+        -- animasi diculik / knockback), pause tween, lalu lanjut setelah selesai.
         if isStunned() then
             local posBefore = root.Position
             local stunStart = tick()
@@ -1377,7 +1447,7 @@ local function tweenToPoint(targetPos, timeout, forceNoclip)
             vel.Velocity = Vector3.zero
 
             -- Noclip ikut dimatiin selama stun (karakter gak boleh tembus apa-apa
-            -- pas lagi ke-stun / diculik). Statusnya dicatat buat dipulihkan nanti.
+            -- pas lagi ke-stun / ragdoll / diculik). Statusnya dicatat buat dipulihkan nanti.
             local hadNoclip = noclipOn
             if noclipOn then
                 setTweenNoclip(false)
@@ -1391,8 +1461,11 @@ local function tweenToPoint(targetPos, timeout, forceNoclip)
             vel.MaxForce = Vector3.new(1e9, 1e9, 1e9)
             gyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
 
-            -- Stun habis: kalau sebelumnya noclip nyala, nyalain lagi
-            if hadNoclip then
+            -- Noclip JANGAN otomatis nyala lagi setelah stun: dulu ini yang bikin
+            -- karakter tembus tanah pas bangun dari ragdoll. Kalau emang nyangkut,
+            -- watchdog progress yang bakal nyalain lagi. Pengecualian: tween yang
+            -- memang minta noclip dari awal.
+            if hadNoclip and (NOCLIP_FROM_START or forceNoclip) then
                 noclipOn = true
                 setTweenNoclip(true)
             end
@@ -1565,7 +1638,7 @@ local function walkToPointHeld(targetPos, timeout)
             break
         end
 
-        -- STUN: lepas semua tombol, tunggu stun habis, jangan hitung sebagai stuck
+        -- STUN / HIT / RAGDOLL: lepas semua tombol, tunggu selesai, jangan hitung sebagai stuck
         if isStunned() then
             releaseAllMoveKeys()
             local stunStart = tick()
@@ -2353,7 +2426,7 @@ local function mainLoop()
     local basketWarned = false
 
     while Enabled do
-        -- Jangan ngapa-ngapain selagi stun (diculik / animasi ambil candy)
+        -- Jangan ngapa-ngapain selagi stun / kena hit / ragdoll
         waitUntilNotStunned()
         if not Enabled then break end
 
