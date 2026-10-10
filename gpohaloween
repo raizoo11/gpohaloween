@@ -1278,7 +1278,7 @@ local function getStandingHeight(hum, root)
     return hum.HipHeight + root.Size.Y / 2
 end
 
-local function tweenToPoint(targetPos, timeout)
+local function tweenToPoint(targetPos, timeout, forceNoclip)
     timeout = timeout or 8
 
     -- Jangan mulai tween selagi stun
@@ -1323,7 +1323,7 @@ local function tweenToPoint(targetPos, timeout)
     local noclipOn = false
     local reached = false
 
-    if NOCLIP_FROM_START then
+    if NOCLIP_FROM_START or forceNoclip then
         noclipOn = true
         setTweenNoclip(true)
     end
@@ -1376,12 +1376,26 @@ local function tweenToPoint(targetPos, timeout)
             gyro.MaxTorque = Vector3.zero
             vel.Velocity = Vector3.zero
 
+            -- Noclip ikut dimatiin selama stun (karakter gak boleh tembus apa-apa
+            -- pas lagi ke-stun / diculik). Statusnya dicatat buat dipulihkan nanti.
+            local hadNoclip = noclipOn
+            if noclipOn then
+                setTweenNoclip(false)
+                noclipOn = false
+            end
+
             waitUntilNotStunned()
 
             if not Enabled or not root.Parent then break end
 
             vel.MaxForce = Vector3.new(1e9, 1e9, 1e9)
             gyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+
+            -- Stun habis: kalau sebelumnya noclip nyala, nyalain lagi
+            if hadNoclip then
+                noclipOn = true
+                setTweenNoclip(true)
+            end
 
             -- Waktu stun gak dihitung ke timeout & watchdog progress
             startTime = startTime + (tick() - stunStart)
@@ -1738,19 +1752,109 @@ local function getWitchHat()
     return witch and witch:FindFirstChild("Witch's HatHat")
 end
 
+-- ============ Sampai ke Witch (target di LANTAI, bukan topi) ============
+-- Sebelumnya tujuannya topi ("Witch's HatHat") yang posisinya melayang di atas
+-- kepala NPC / bisa jauh dari lantai, jadi sering "gak beneran sampai". Sekarang:
+--   1) cari badan NPC, ambil titik ~4 stud di depannya (arah karakter), turun ke LANTAI
+--   2) jalan lewat pathfinding
+--   3) kalau belum pas (jarak datar > SHOP_ARRIVE_FLAT), tween lurus + noclip, max 3x
+--   4) kalau tetap belum pas, batalin pembelian (return false -> backoff, script tetap jalan)
+local SHOP_ARRIVE_FLAT = 6
+local ShopRetryAt = 0 -- kalau trip gagal, jangan dicoba lagi sebelum waktu ini (tick)
+
+local ShopTarget = Instance.new("Part")
+ShopTarget.Name = "AutoEventDoorShopTarget"
+ShopTarget.Size = Vector3.new(1, 1, 1)
+ShopTarget.Transparency = 1
+ShopTarget.CanCollide = false
+ShopTarget.CanQuery = false
+ShopTarget.Anchored = true
+ShopTarget.Parent = workspace
+
+-- Return: posisi lantai dekat Witch, atau nil kalau NPC gak ketemu
+local function getWitchStandPosition()
+    local npcs = workspace:FindFirstChild("NPCs")
+    local witch = npcs and npcs:FindFirstChild("Witch of Halloween")
+    if not witch then return nil end
+
+    local ref = witch:FindFirstChild("HumanoidRootPart")
+        or witch.PrimaryPart
+        or witch:FindFirstChildWhichIsA("BasePart", true)
+    if not ref then return nil end
+
+    -- Geser ~4 stud dari NPC ke arah karakter, biar gak nabrak badan NPC
+    local offset = Vector3.zero
+    local toPlayer = RootPart.Position - ref.Position
+    local flat = Vector3.new(toPlayer.X, 0, toPlayer.Z)
+    if flat.Magnitude > 1 then
+        offset = flat.Unit * 4
+    end
+
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {Character, witch, ShopTarget, IndicatorBeam.targetPart}
+
+    local origin = ref.Position + offset + Vector3.new(0, 5, 0)
+    local result = workspace:Raycast(origin, Vector3.new(0, -80, 0), params)
+
+    if result then
+        return result.Position
+    end
+    return ref.Position + offset - Vector3.new(0, 3, 0)
+end
+
+-- Return: true kalau akhirnya cukup dekat (jarak datar <= SHOP_ARRIVE_FLAT)
+local function arriveAtWitch()
+    local ground = getWitchStandPosition()
+    if not ground then return false end
+    ShopTarget.Position = ground
+
+    local function closeEnough()
+        local d = RootPart.Position - ground
+        return Vector3.new(d.X, 0, d.Z).Magnitude <= SHOP_ARRIVE_FLAT and math.abs(d.Y) <= 10
+    end
+
+    if closeEnough() then return true end
+
+    -- 1) Pathfinding biasa
+    walkToDoorHeld(ShopTarget)
+    if not Enabled then return false end
+    if closeEnough() then return true end
+
+    -- 2) Fallback: tween lurus + noclip, hitung ulang posisi NPC tiap percobaan
+    for attempt = 1, 3 do
+        if not Enabled then return false end
+
+        waitUntilNotStunned()
+        ground = getWitchStandPosition() or ground
+        ShopTarget.Position = ground
+
+        print("[AutoEventDoor] Belum pas sampai di Witch, tween langsung + noclip (percobaan " .. attempt .. "/3).")
+        tweenToPoint(ground, 30, true)
+        if closeEnough() then return true end
+    end
+
+    return closeEnough()
+end
+
 -- Return: true kalau minimal 1 pembelian terverifikasi (candy berkurang).
 -- Sampai di NPC, beli berulang selama candy masih >= CandyTarget, jadi gak
 -- perlu bolak-balik jalan tiap beli.
 local function doShopTrip()
-    local hat = getWitchHat()
-    if not hat then
-        print("[AutoEventDoor] Witch's HatHat gak ketemu di workspace.NPCs[\"Witch of Halloween\"].")
+    if not getWitchStandPosition() then
+        print("[AutoEventDoor] Witch of Halloween gak ketemu di workspace.NPCs.")
         return false
     end
 
     print("[AutoEventDoor] Candy cukup, jalan ke Witch of Halloween...")
-    local arrived = walkToDoorHeld(hat)
-    if not arrived or not Enabled then
+    local arrived = arriveAtWitch()
+    if not Enabled then
+        return false
+    end
+    if not arrived then
+        -- Belum beneran sampai: JANGAN coba beli. Return false -> mainLoop kasih
+        -- jeda (backoff) lalu lanjut farm door, script tetap jalan.
+        print("[AutoEventDoor] Belum pas sampai di Witch, pembelian dibatalkan.")
         return false
     end
 
@@ -1989,6 +2093,7 @@ end
 --   4) tunggu 8 detik, cek jumlah chest
 -- sampai chest tinggal 1, lalu balik farm door. (Basket otomatis di-equip lagi
 -- di iterasi mainLoop berikutnya.)
+local CHEST_KEEP = 1                -- chest yang disisakan (berhenti buka kalau jumlah <= ini)
 local OPEN_WAIT_AFTER_ACCEPT = 8
 local PROMPT_WAIT = 4               -- tunggu prompt muncul setelah klik layar
 local OPEN_MAX_CYCLES = 60          -- pengaman biar gak infinite loop
@@ -2163,13 +2268,21 @@ local function doChestOpen()
     local last = getChestCount()
     local noProgress = 0
     local promptFails = 0
-    print("[AutoEventDoor] Chest " .. last .. " >= " .. Settings.ChestOpenAt .. ", mulai buka sampai sisa 1...")
+    print("[AutoEventDoor] Chest " .. last .. " >= " .. Settings.ChestOpenAt .. ", mulai buka sampai sisa " .. CHEST_KEEP .. "...")
 
     for cycle = 1, OPEN_MAX_CYCLES do
         if not Enabled then return false end
 
         waitUntilNotStunned()
         if not Enabled then return false end
+
+        -- Sudah tinggal sisa? Jangan buka lagi
+        if getChestCount() <= CHEST_KEEP then
+            print("[AutoEventDoor] Chest tinggal " .. getChestCount() .. ", berhenti buka.")
+            StatusExtra = ""
+            updateGuiState()
+            return true
+        end
 
         local tool = ensureChestEquipped()
         if not tool then
@@ -2208,7 +2321,7 @@ local function doChestOpen()
         local now = getChestCount()
         print("[AutoEventDoor] Buka chest siklus " .. cycle .. ": " .. last .. " -> " .. now)
 
-        if now <= 1 then
+        if now <= CHEST_KEEP then
             StatusExtra = ""
             updateGuiState()
             return true
@@ -2309,23 +2422,23 @@ local function mainLoop()
 
         -- Candy udah cukup: pergi beli chest dulu, lalu balik ngumpulin candy
         local candyCount = getCandyCount()
-        if not tripped and candyCount and candyCount >= Settings.CandyTarget then
+        if not tripped and candyCount and candyCount >= Settings.CandyTarget
+            and tick() >= ShopRetryAt then
             tripped = true
 
             if doShopTrip() then
                 shopFailures = 0
-            else
-                -- gagal (NPC gak ketemu / remote error / candy gak berkurang) -
-                -- jangan muter terus, berhenti setelah 3x gagal berturut-turut
+                ShopRetryAt = 0
+            elseif Enabled then
+                -- Gagal (NPC gak ketemu / remote error / candy gak berkurang):
+                -- JANGAN matiin script. Coba lagi nanti dengan jeda makin lama
+                -- (30s, 60s, ... max 180s), sementara lanjut farm door.
                 shopFailures = shopFailures + 1
-                if shopFailures >= 3 and Enabled then
-                    print("[AutoEventDoor] Beli chest gagal 3x berturut-turut, stop otomatis.")
-                    Enabled = false
-                    releaseAllMoveKeys()
-                    updateGuiState()
-                    break
-                end
-                task.wait(2)
+                local backoff = math.min(30 * shopFailures, 180)
+                ShopRetryAt = tick() + backoff
+                print("[AutoEventDoor] Trip Witch gagal (" .. shopFailures .. "x), coba lagi " ..
+                    backoff .. " detik lagi. Lanjut farm door dulu.")
+                task.wait(1)
             end
         end
 
@@ -2345,7 +2458,7 @@ local function mainLoop()
                         updateGuiState()
 
                         local candyNow = getCandyCount()
-                        if candyNow and candyNow >= Settings.CandyTarget then
+                        if candyNow and candyNow >= Settings.CandyTarget and tick() >= ShopRetryAt then
                             interrupted = true
                             break
                         end
