@@ -1,0 +1,2980 @@
+--[[
+    GPO - Auto Event Door (Spooksville) Script + GUI
+    - Target: workspace.Islands.Spooksville.Building:GetChildren()[i].eventDoor
+    - Pathfinding: NAV v2 (lihat blok "NAV" di tengah script). Jalan lewat TWEEN
+      (BodyVelocity) atau HOLD W/A/S/D, bukan Humanoid:MoveTo instan
+    - Setelah sampai di eventDoor, trigger ProximityPrompt di
+      eventDoor.Frame.ProximityPrompt selama X detik (bisa diatur di GUI).
+      Urutan di door: tunggu sebentar -> Geppo 1x -> fire prompt
+      (Settings.DoorGeppo / DoorArriveWait / DoorGeppoDelay)
+      (pakai fireproximityprompt kalau ada, fallback ke InputHoldBegin/End, lalu tombol E)
+    - Deteksi STUN (LocalPlayer.StunFolder.Stun): dipakai buat nunggu animasi ambil
+      candy / diculik selesai di antara aksi. TWEEN sendiri GAK di-pause kena stun/hit
+      (tetap jalan terus); watchdog progress cuma dijeda selama stun. TANPA noclip:
+      kalau macet, path dihitung ulang dari posisi sekarang
+    - Ngunjungin SEMUA event door yang ada (dihitung otomatis)
+    - Tiap door punya COOLDOWN (default 180 detik / 3 menit) sejak dikunjungi.
+      Door yang masih cooldown di-skip. Kalau semua door lagi cooldown, script
+      balik ke door yang cooldown-nya paling duluan abis (= door pertama yang
+      dikunjungi), nunggu di situ sampai siap, baru lanjut
+    - Radius pencarian & WalkSpeed bisa diatur di GUI
+    - Anti-stuck: tekan Space kalau posisi gak gerak dalam beberapa waktu
+    - Kalau candy >= Candy Target: jalan ke Witch of Halloween, beli Rare Fruit Chest,
+      lalu balik ngumpulin candy
+    - Auto Buka Chest: kalau Rare Fruit Chest >= "Buka Chest di" (default 7), loop:
+      equip chest -> klik layar -> ConfirmationPrompt muncul -> klik Accept -> tunggu 9s
+      -> ulang sampai chest tinggal 2 (CHEST_KEEP), lalu balik farm door
+      (0 di GUI = fitur mati)
+    - Auto Merchant: kalau Traveling Merchant lagi muncul, jalan ke sana & beli item pilihan
+      lewat Events.TravelingMerchentRemote (1x per stok; stok baru = merchant hilang
+      lalu muncul lagi)
+    - Auto Join Private Server (First Sea): kalau script dijalankan di MAIN MENU,
+      otomatis kirim kode private server -> pilih Regular -> konfirmasi "First Sea".
+      Kode & toggle diatur di GUI (disimpan ke file biar kebaca di main menu)
+    - Discord Webhook: tiap ada item baru di Backpack/Character, kirim embed "Item Diperoleh!"
+      ke webhook (URL + ON/OFF + tombol Test di GUI, disimpan ke file)
+    - Toggle ON/OFF dengan tombol "," (Comma) atau lewat GUI
+    - GUI bertab (Farm / Gerak / Shop / Server); RightShift = sembunyikan/tampilkan GUI
+]]
+
+local Players = game:GetService("Players")
+local PathfindingService = game:GetService("PathfindingService")
+local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local CoreGui = game:GetService("CoreGui")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+
+-- ================= Auto Join Private Server (First Sea) =================
+-- Alur (sama kayak hub), dijalankan di MAIN MENU (PlaceId 1730877806):
+--   1) ReplicatedStorage.Events.reserved:InvokeServer(<kode private server>)
+--   2) klik  PlayerGui.chooseType.Frame.Options.Regular
+--   3) klik  PlayerGui.ConfirmationPrompt.Main.OptionsFrame["First Sea"]
+-- Diulang tiap RetryInterval detik sampai teleport kejadian.
+-- Kode = bagian kode saja dari link private server (bukan link lengkap).
+-- Setelan (toggle + kode) diatur dari GUI, disimpan ke file ConfigFile supaya
+-- kebaca juga pas script jalan di main menu. Bisa juga lewat getgenv():
+--   getgenv().AutoJoinPrivateServer = true ; getgenv().PrivateServerCode = "kode"
+-- NOTE: setelah teleport script harus jalan lagi di First Sea. Paling gampang pakai
+-- folder autoexec executor-mu, atau isi ReexecuteUrl (butuh queue_on_teleport).
+-- Semua dibungkus 1 table biar gak nambah banyak variabel local (batas Luau 200).
+local PrivateServer = {
+    MainMenuPlaceId = 1730877806,
+    FirstSeaPlaceId = 3978370137,
+    ConfigFile = "AutoEventDoor_PrivateServer.json",
+    RetryInterval = 8,   -- detik antar percobaan join
+    ReexecuteUrl = "",   -- opsional: URL raw script ini, buat di-queue_on_teleport
+    Enabled = true,
+    Code = "A6oWXv8rPV",
+}
+
+function PrivateServer.load()
+    pcall(function()
+        if typeof(isfile) == "function" and typeof(readfile) == "function"
+            and isfile(PrivateServer.ConfigFile) then
+            local data = game:GetService("HttpService"):JSONDecode(readfile(PrivateServer.ConfigFile))
+            if type(data) == "table" then
+                if type(data.Enabled) == "boolean" then PrivateServer.Enabled = data.Enabled end
+                if type(data.Code) == "string" then PrivateServer.Code = data.Code end
+            end
+        end
+    end)
+
+    -- Override lewat getgenv (nama sama kayak di hub)
+    pcall(function()
+        local genv = getgenv()
+        if genv.AutoJoinPrivateServer ~= nil then
+            PrivateServer.Enabled = genv.AutoJoinPrivateServer == true
+        end
+        if type(genv.PrivateServerCode) == "string" and genv.PrivateServerCode ~= "" then
+            PrivateServer.Code = genv.PrivateServerCode
+        end
+    end)
+
+    PrivateServer.Code = tostring(PrivateServer.Code or ""):match("^%s*(.-)%s*$") or ""
+end
+
+function PrivateServer.save()
+    pcall(function()
+        local genv = getgenv()
+        genv.AutoJoinPrivateServer = PrivateServer.Enabled
+        genv.PrivateServerCode = PrivateServer.Code
+    end)
+    pcall(function()
+        if typeof(writefile) == "function" then
+            writefile(PrivateServer.ConfigFile, game:GetService("HttpService"):JSONEncode({
+                Enabled = PrivateServer.Enabled,
+                Code = PrivateServer.Code,
+            }))
+        end
+    end)
+end
+
+-- Tunggu child bertingkat, mis. {"chooseType","Frame","Options","Regular"}
+function PrivateServer.waitPath(root, names, timeout)
+    local node = root
+    for _, name in ipairs(names) do
+        node = node and node:WaitForChild(name, timeout)
+    end
+    return node
+end
+
+-- Tekan tombol GUI: fire koneksi event (paling andal), fallback firesignal,
+-- terakhir klik mouse beneran di tengah tombol.
+function PrivateServer.press(btn)
+    if typeof(getconnections) == "function" then
+        for _, signalName in ipairs({"MouseButton1Click", "Activated"}) do
+            local fired = false
+            local ok, conns = pcall(getconnections, btn[signalName])
+            if ok and type(conns) == "table" then
+                for _, conn in ipairs(conns) do
+                    if pcall(function() conn:Fire() end) then fired = true end
+                end
+            end
+            if fired then return true end
+        end
+    end
+
+    if typeof(firesignal) == "function" and pcall(firesignal, btn.MouseButton1Click) then
+        return true
+    end
+
+    pcall(function()
+        local pos, size = btn.AbsolutePosition, btn.AbsoluteSize
+        local inset = game:GetService("GuiService"):GetGuiInset()
+        local x, y = pos.X + size.X / 2, pos.Y + size.Y / 2 + inset.Y
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+        task.wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    end)
+    return true
+end
+
+-- Satu kali percobaan join. Return: true kalau semua tombol berhasil ditekan
+function PrivateServer.joinOnce()
+    local code = PrivateServer.Code
+
+    -- 1) kirim kode private server (di thread terpisah, InvokeServer bisa nunggu)
+    task.spawn(function()
+        pcall(function()
+            local events = ReplicatedStorage:WaitForChild("Events", 10)
+            local reserved = events and events:WaitForChild("reserved", 10)
+            if reserved then
+                reserved:InvokeServer(code)
+            end
+        end)
+    end)
+    task.wait(2)
+
+    local playerGui = LocalPlayer:WaitForChild("PlayerGui", 10)
+    if not playerGui then return false end
+
+    -- 2) pilih "Regular"
+    local regular = PrivateServer.waitPath(playerGui, {"chooseType", "Frame", "Options", "Regular"}, 10)
+    if not regular then
+        print("[AutoEventDoor] chooseType...Regular gak ketemu di main menu.")
+        return false
+    end
+    PrivateServer.press(regular)
+    task.wait(2)
+
+    -- 3) konfirmasi "First Sea"
+    local firstSea = PrivateServer.waitPath(playerGui, {"ConfirmationPrompt", "Main", "OptionsFrame", "First Sea"}, 10)
+    if not firstSea then
+        print("[AutoEventDoor] ConfirmationPrompt...'First Sea' gak ketemu.")
+        return false
+    end
+    PrivateServer.press(firstSea)
+    return true
+end
+
+function PrivateServer.runMenuLoop()
+    pcall(function()
+        local genv = getgenv()
+        if genv.PrivateJoinLoopRunning then return end
+        genv.PrivateJoinLoopRunning = true
+    end)
+
+    task.spawn(function()
+        while game.PlaceId == PrivateServer.MainMenuPlaceId
+            and PrivateServer.Enabled and PrivateServer.Code ~= "" do
+            local ok, result = pcall(PrivateServer.joinOnce)
+            if not ok then
+                print("[AutoEventDoor] Join private server error: " .. tostring(result))
+            end
+            task.wait(PrivateServer.RetryInterval)
+        end
+        pcall(function() getgenv().PrivateJoinLoopRunning = false end)
+    end)
+end
+
+PrivateServer.load()
+
+-- Di MAIN MENU: cuma ngurusin join private server, script farm gak dijalankan di sini
+-- (di menu belum ada dunia game / event door).
+if game.PlaceId == PrivateServer.MainMenuPlaceId then
+    if PrivateServer.Enabled and PrivateServer.Code ~= "" then
+        print("[AutoEventDoor] Main menu: auto join private server (First Sea)...")
+
+        local queueFn = queue_on_teleport or queueonteleport
+        if PrivateServer.ReexecuteUrl ~= "" and typeof(queueFn) == "function" then
+            pcall(queueFn, string.format("loadstring(game:HttpGet(%q))()", PrivateServer.ReexecuteUrl))
+        end
+
+        PrivateServer.runMenuLoop()
+    else
+        print("[AutoEventDoor] Main menu: Auto Join Private Server OFF atau kode kosong. " ..
+            "Nyalain & isi kode dulu dari GUI pas lagi di dalam game (disimpan ke file).")
+    end
+    return
+end
+
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local Humanoid = Character:WaitForChild("Humanoid")
+local RootPart = Character:WaitForChild("HumanoidRootPart")
+
+-- ================= Candy reader =================
+
+-- Baca jumlah Candy dari LocalPlayer.PlayerGui.CandyIndicator.CandyBox
+-- Dukung baik TextLabel/TextButton (parse angka dari Text) maupun ValueBase (.Value)
+local CachedCandyBox = nil
+
+-- CandyIndicator/CandyBox cuma muncul di PlayerGui pas tool-nya di-equip, jadi
+-- dia bisa ilang-muncul lagi tiap equip/unequip. Makanya di sini re-scan ringan
+-- tiap kali cache-nya kosong/ke-invalid, BUKAN cuma sekali di awal.
+local function findCandyBox()
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not playerGui then return nil end
+
+    local indicator = playerGui:FindFirstChild("CandyIndicator")
+    if not indicator then return nil end
+
+    return indicator:FindFirstChild("CandyBox")
+end
+
+-- Parse angka dari text, koma dibuang dulu (biar "1,250" kebaca 1250, bukan 1)
+local function parseNumber(text)
+    local cleaned = tostring(text):gsub(",", "")
+    local numStr = cleaned:match("%d+")
+    return numStr and tonumber(numStr) or nil
+end
+
+local function getCandyCount()
+    if not CachedCandyBox or not CachedCandyBox.Parent then
+        -- FindFirstChild doang (murah), gak pakai WaitForChild biar gak nge-block -
+        -- fungsi ini dipanggil berkala jadi kalau belum ketemu, nanti dicoba lagi
+        CachedCandyBox = findCandyBox()
+        if not CachedCandyBox then return nil end
+    end
+
+    local candyBox = CachedCandyBox
+
+    if candyBox:IsA("ValueBase") then
+        return tonumber(candyBox.Value)
+    end
+
+    if candyBox:IsA("TextLabel") or candyBox:IsA("TextButton") then
+        return parseNumber(candyBox.Text)
+    end
+
+    local nested = candyBox:FindFirstChildWhichIsA("ValueBase")
+        or candyBox:FindFirstChildWhichIsA("TextLabel", true)
+    if nested then
+        if nested:IsA("ValueBase") then
+            return tonumber(nested.Value)
+        else
+            return parseNumber(nested.Text)
+        end
+    end
+
+    return nil
+end
+
+-- ================= Settings (bisa diubah lewat GUI) =================
+local Settings = {
+    SearchRadius = 50,
+    HoldDuration = 3,   -- durasi (detik) fire ProximityPrompt di tiap door
+
+    WalkSpeed = 16,
+    WalkSpeedEnabled = false,
+    TweenMode = true,   -- true = gerak pakai tween (BodyVelocity), false = hold WASD
+    TweenSpeed = 60,    -- stud/detik
+    CandyTarget = 500,  -- kalau candy >= ini, pergi ke Witch buat beli chest
+    DoorCooldown = 180, -- detik, cooldown per door setelah dikunjungi (3 menit)
+    ChestOpenAt = 7, -- kalau Rare Fruit Chest >= ini, buka chest berulang sampai sisa CHEST_KEEP (2) (0 = mati)
+    AutoMerchant = false, -- jalan ke Traveling Merchant & beli item pilihan
+    MerchantItems = "",   -- nama item, dipisah koma
+    GeppoPass = false,  -- spam skill Geppo/Sky Walk selama tween (kayak di source)
+    DoorGeppo = true,       -- sampai di door: tunggu sebentar, Geppo 1x, baru fire prompt
+    DoorArriveWait = 0.5,   -- detik nunggu setelah sampai di door sebelum Geppo
+    DoorGeppoDelay = 0.3,   -- detik jeda setelah Geppo sebelum fire prompt
+}
+
+local BUILDING_PATH = {"Islands", "Spooksville", "Building"}
+local EVENT_DOOR_CHILD_NAME = "eventDoor"
+
+-- Door yang DI-IGNORE (gak pernah dikunjungi & gak dihitung di progress), dipilih
+-- lewat nomor urut di workspace.Islands.Spooksville.Building:GetChildren().
+-- [59] = workspace.Islands.Spooksville.Building:GetChildren()[59].eventDoor
+-- Tambah nomor lain dengan format [nomor] = true.
+-- NOTE: urutan GetChildren() bisa beda antar server. Kalau yang ke-skip ternyata
+-- bukan door yang dimaksud, pakai IGNORED_DOOR_NAMES (nama child di Building).
+local IGNORED_DOOR_INDEXES = {
+    [59] = true,
+}
+local IGNORED_DOOR_NAMES = {
+    -- ["NamaChildBuilding"] = true,
+}
+local IgnoredDoorPrinted = {}
+local TOGGLE_KEY = Enum.KeyCode.Comma
+local MINE_DISTANCE = 8
+local WAYPOINT_REACH_DISTANCE = 6
+
+local Enabled = false
+local LastKnownDoorCount = 0 -- total door yang ketemu terakhir kali di-scan, buat progress label
+
+-- Cooldown per door: LastVisit[door] = waktu (tick) pas door itu terakhir dikunjungi.
+-- Door yang gagal dicapai juga dicatat di sini (dihitung & kena cooldown), jadi
+-- gak dicoba terus-terusan tanpa henti.
+local LastVisit = {}
+local COOLDOWN_BUFFER = 3 -- detik ekstra, jaga-jaga selisih waktu client vs server
+local StatusExtra = ""    -- teks tambahan di status (mis. hitung mundur cooldown)
+
+-- Kapan door ini siap dipakai lagi (waktu tick). 0 = belum pernah dikunjungi = siap
+local function getDoorReadyAt(door)
+    local last = LastVisit[door]
+    if not last then return 0 end
+    return last + Settings.DoorCooldown + COOLDOWN_BUFFER
+end
+
+local function formatTime(seconds)
+    seconds = math.max(0, math.floor(seconds))
+    return string.format("%d:%02d", math.floor(seconds / 60), seconds % 60)
+end
+
+local StatusText, ToggleButton, ProgressLabel
+local RadiusBox, DurationBox, SpeedBox, TweenSpeedBox, CandyTargetBox
+
+local function hookWalkSpeedEnforcement(hum)
+    hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+        if Settings.WalkSpeedEnabled and hum.WalkSpeed ~= Settings.WalkSpeed then
+            hum.WalkSpeed = Settings.WalkSpeed
+        end
+    end)
+end
+
+LocalPlayer.CharacterAdded:Connect(function(char)
+    Character = char
+    Humanoid = char:WaitForChild("Humanoid")
+    RootPart = char:WaitForChild("HumanoidRootPart")
+
+    if Settings.WalkSpeedEnabled then
+        Humanoid.WalkSpeed = Settings.WalkSpeed
+    end
+
+    hookWalkSpeedEnforcement(Humanoid)
+end)
+
+hookWalkSpeedEnforcement(Humanoid)
+
+-- ================= Rare Fruit Chest counter =================
+-- Baca jumlah "Rare Fruit Chest" di Backpack (+ Character, soalnya tool yang
+-- lagi di-equip pindah ke Character). Jumlah dicari lewat beberapa cara karena
+-- belum pasti game nyimpennya gimana:
+--   1) Attribute / child ValueBase bernama Amount, Count, Quantity, Stack, Qty
+--   2) Angka di nama tool / ToolTip, mis. "Rare Fruit Chest x5" atau "(5)"
+--   3) Kalau gak ada info jumlah: tiap Tool dihitung 1 (jadi 2 tool = 2)
+local CHEST_NAME = "Rare Fruit Chest"
+local COUNT_KEYS = {"Amount", "Count", "Quantity", "Stack", "Qty"}
+local ChestDebugPrinted = false
+
+local function readToolCount(tool)
+    for _, key in ipairs(COUNT_KEYS) do
+        local attr = tool:GetAttribute(key)
+        if type(attr) == "number" then return attr end
+
+        local child = tool:FindFirstChild(key)
+        if child and child:IsA("ValueBase") then
+            local n = tonumber(child.Value)
+            if n then return n end
+        end
+    end
+
+    local fromName = tool.Name:match("[xX]%s*(%d+)") or tool.Name:match("%((%d+)%)")
+    if fromName then return tonumber(fromName) end
+
+    local fromTip = tool.ToolTip and (tool.ToolTip:match("[xX]%s*(%d+)") or tool.ToolTip:match("%((%d+)%)"))
+    if fromTip then return tonumber(fromTip) end
+
+    return nil
+end
+
+-- Print isi tool sekali aja, buat diagnosa kalau jumlahnya salah kebaca
+local function debugDumpChest(tool)
+    if ChestDebugPrinted then return end
+    ChestDebugPrinted = true
+
+    local parts = {}
+    for k, v in pairs(tool:GetAttributes()) do
+        table.insert(parts, "attr " .. tostring(k) .. "=" .. tostring(v))
+    end
+    for _, c in ipairs(tool:GetChildren()) do
+        local val = c:IsA("ValueBase") and ("=" .. tostring(c.Value)) or ""
+        table.insert(parts, c.ClassName .. " " .. c.Name .. val)
+    end
+    print("[AutoEventDoor] '" .. tool.Name .. "' ketemu. Isi: " ..
+        (#parts > 0 and table.concat(parts, ", ") or "(kosong, dihitung 1 per tool)"))
+end
+
+local function getChestCountFromTools()
+    local total = 0
+    local lowerName = string.lower(CHEST_NAME)
+
+    local function scan(container)
+        if not container then return end
+        for _, child in ipairs(container:GetChildren()) do
+            if child:IsA("Tool") and string.sub(string.lower(child.Name), 1, #lowerName) == lowerName then
+                debugDumpChest(child)
+                total = total + (readToolCount(child) or 1)
+            end
+        end
+    end
+
+    scan(LocalPlayer:FindFirstChild("Backpack"))
+    scan(LocalPlayer.Character)
+    return total
+end
+
+-- ---- Sumber utama: Hotbar GUI ----
+-- LocalPlayer.PlayerGui.BackpackGui.Hotbar.Zero["Rare Fruit Chest"]
+-- (kalau item pindah slot, dicari di semua slot Hotbar). Angka jumlah dicari di
+-- TextLabel/TextButton di dalam item itu, dengan prioritas:
+--   1) label bernama Amount/Count/Quantity/Stack/Qty
+--   2) label berformat "x5"
+--   3) label berisi angka murni (selain label nomor tombol/slot/nama)
+-- Kalau item ketemu tapi angkanya gak kebaca, dihitung 1.
+-- Kalau item gak ada di Hotbar, fallback ke hitung Tool di Backpack/Character.
+local HotbarDebugPrinted = false
+local COUNT_NAME_HINTS = {"amount", "count", "quantity", "stack", "qty"}
+local IGNORE_NAME_HINTS = {"number", "key", "slot", "index", "name", "title", "hotkey"}
+
+local function nameHas(name, hints)
+    name = string.lower(name)
+    for _, h in ipairs(hints) do
+        if string.find(name, h, 1, true) then return true end
+    end
+    return false
+end
+
+local function findHotbarChest()
+    local gui = LocalPlayer:FindFirstChild("PlayerGui")
+    local backpackGui = gui and gui:FindFirstChild("BackpackGui")
+    local hotbar = backpackGui and backpackGui:FindFirstChild("Hotbar")
+    if not hotbar then return nil end
+
+    -- Jalur yang kamu kasih dulu (slot Zero), baru scan semua slot
+    local zero = hotbar:FindFirstChild("Zero")
+    local direct = zero and zero:FindFirstChild(CHEST_NAME)
+    if direct then return direct end
+
+    for _, d in ipairs(hotbar:GetDescendants()) do
+        if d.Name == CHEST_NAME then return d end
+    end
+    return nil
+end
+
+local function readHotbarCount(node)
+    local objs = {node}
+    for _, d in ipairs(node:GetDescendants()) do
+        table.insert(objs, d)
+    end
+
+    local named, xFormat, plain = nil, nil, nil
+    local dump = {}
+
+    for _, obj in ipairs(objs) do
+        if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+            local text = tostring(obj.Text):gsub(",", "")
+            table.insert(dump, obj.ClassName .. " " .. obj.Name .. "=\"" .. text .. "\"")
+
+            local pure = text:match("^%s*(%d+)%s*$")
+            local xN = text:match("^%s*[xX]%s*(%d+)%s*$") or text:match("[xX]%s*(%d+)")
+
+            if nameHas(obj.Name, COUNT_NAME_HINTS) then
+                local n = pure or xN
+                if n then named = named or tonumber(n) end
+            elseif not nameHas(obj.Name, IGNORE_NAME_HINTS) then
+                if xN then
+                    xFormat = xFormat or tonumber(xN)
+                elseif pure then
+                    plain = plain or tonumber(pure)
+                end
+            end
+        elseif obj:IsA("ValueBase") and nameHas(obj.Name, COUNT_NAME_HINTS) then
+            local n = tonumber(obj.Value)
+            if n then named = named or n end
+        end
+    end
+
+    -- Print struktur sekali aja, buat diagnosa kalau angkanya salah kebaca
+    if not HotbarDebugPrinted then
+        HotbarDebugPrinted = true
+        print("[AutoEventDoor] Hotbar '" .. node:GetFullName() .. "' (" .. node.ClassName .. "). Label: " ..
+            (#dump > 0 and table.concat(dump, " | ") or "(gak ada TextLabel/TextButton)"))
+    end
+
+    return named or xFormat or plain
+end
+
+local function getChestCount()
+    local node = findHotbarChest()
+    if node then
+        return readHotbarCount(node) or 1
+    end
+    return getChestCountFromTools()
+end
+
+local function getCandyText()
+    local candy = getCandyCount()
+    return "Candy: " .. (candy and tostring(candy) or "-") .. "/" .. Settings.CandyTarget
+        .. "  |  Chest: " .. getChestCount()
+end
+
+-- ================= Discord Webhook (item diperoleh) =================
+-- Deteksi item baru di Backpack + Character: tiap 1.5 detik jumlah per-nama item dibandingkan
+-- dengan snapshot sebelumnya, yang NAMBAH dikirim ke Discord (beberapa item -> 1 pesan, max 10 embed).
+-- Dihitung dari total Backpack + Character, jadi equip/unequip tool (pindah container)
+-- TIDAK ikut kekirim. Respawn: snapshot di-reset diam-diam supaya gak ada notif palsu.
+-- URL + toggle diatur dari GUI & disimpan ke file. Bungkus 1 table biar hemat local.
+local Webhook = {
+    ConfigFile = "AutoEventDoor_Webhook.json",
+    Url = "",
+    Enabled = true,
+    Interval = 1.5,
+    queue = {},
+    sending = false,
+    started = false,
+    last = {},
+    quietUntil = 0,
+}
+
+function Webhook.trim(s)
+    return tostring(s or ""):match("^%s*(.-)%s*$") or ""
+end
+
+function Webhook.load()
+    pcall(function()
+        if typeof(isfile) == "function" and typeof(readfile) == "function"
+            and isfile(Webhook.ConfigFile) then
+            local data = game:GetService("HttpService"):JSONDecode(readfile(Webhook.ConfigFile))
+            if type(data) == "table" then
+                if type(data.Enabled) == "boolean" then Webhook.Enabled = data.Enabled end
+                if type(data.Url) == "string" then Webhook.Url = Webhook.trim(data.Url) end
+            end
+        end
+    end)
+end
+
+function Webhook.save()
+    pcall(function()
+        if typeof(writefile) == "function" then
+            writefile(Webhook.ConfigFile, game:GetService("HttpService"):JSONEncode({
+                Enabled = Webhook.Enabled,
+                Url = Webhook.Url,
+            }))
+        end
+    end)
+end
+
+-- URL harus webhook Discord beneran (placeholder "XXXXX" ditolak)
+function Webhook.valid()
+    local u = Webhook.Url
+    if type(u) ~= "string" then return false end
+    return u:match("^https://[%w%.]*discord%.com/api/webhooks/%d+/[%w_%-]+") ~= nil
+        or u:match("^https://[%w%.]*discordapp%.com/api/webhooks/%d+/[%w_%-]+") ~= nil
+end
+
+function Webhook.post(payload)
+    local req = request or http_request or (syn and syn.request) or (http and http.request)
+    if typeof(req) ~= "function" then
+        error("executor gak punya request/http_request")
+    end
+    return req({
+        Url = Webhook.Url,
+        Method = "POST",
+        Headers = { ["Content-Type"] = "application/json" },
+        Body = game:GetService("HttpService"):JSONEncode(payload),
+    })
+end
+
+function Webhook.flush()
+    local ok, err = pcall(function()
+        while #Webhook.queue > 0 do
+            local batch = {}
+            for _ = 1, math.min(10, #Webhook.queue) do
+                table.insert(batch, table.remove(Webhook.queue, 1))
+            end
+
+            local okPost, res = pcall(Webhook.post, { embeds = batch })
+
+            -- Kena rate limit Discord: tunggu sesuai Retry-After, coba sekali lagi
+            if okPost and res and res.StatusCode == 429 then
+                local headers = res.Headers or {}
+                local retry = tonumber(headers["retry-after"] or headers["Retry-After"]) or 3
+                task.wait(math.min(retry, 30) + 0.5)
+                okPost, res = pcall(Webhook.post, { embeds = batch })
+            end
+
+            if not okPost then
+                print("[AutoEventDoor] Webhook gagal kirim: " .. tostring(res))
+            else
+                local code = res and res.StatusCode
+                if code and (code < 200 or code >= 300) then
+                    print("[AutoEventDoor] Webhook ditolak Discord (status " .. tostring(code) .. ").")
+                end
+            end
+
+            task.wait(1.2) -- Discord: ~5 request / 2 detik per webhook
+        end
+    end)
+    if not ok then
+        print("[AutoEventDoor] Webhook error: " .. tostring(err))
+    end
+    Webhook.sending = false
+end
+
+function Webhook.push(embed)
+    if not Webhook.valid() then return end
+    table.insert(Webhook.queue, embed)
+    if #Webhook.queue > 50 then table.remove(Webhook.queue, 1) end
+    if Webhook.sending then return end
+    Webhook.sending = true
+    task.spawn(Webhook.flush)
+end
+
+function Webhook.embed(title, description, color)
+    return {
+        title = title,
+        description = description,
+        color = color or 3066993, -- hijau
+        footer = { text = LocalPlayer.Name .. " - " .. os.date("%H:%M:%S - %d/%m/%Y") },
+    }
+end
+
+function Webhook.itemEmbed(name, amount)
+    return Webhook.embed("Item Diperoleh!",
+        string.format("**Item:** %s\n**Jumlah:** %s", name, tostring(amount)))
+end
+
+-- "Rare Fruit Chest x5" / "Rare Fruit Chest (5)" -> "Rare Fruit Chest"
+function Webhook.baseName(name)
+    local base = tostring(name):gsub("%s*[xX]%s*%d+$", "")
+    base = base:gsub("%s*%(%d+%)$", "")
+    return base
+end
+
+function Webhook.snapshot()
+    local counts = {}
+    local function scan(container)
+        if not container then return end
+        for _, child in ipairs(container:GetChildren()) do
+            if child:IsA("Tool") then
+                local key = Webhook.baseName(child.Name)
+                counts[key] = (counts[key] or 0) + (readToolCount(child) or 1)
+            end
+        end
+    end
+    scan(LocalPlayer:FindFirstChild("Backpack"))
+    scan(LocalPlayer.Character)
+    return counts
+end
+
+function Webhook.check()
+    -- Lagi respawn (Backpack/Character belum ada): jangan bandingin
+    if not LocalPlayer.Character or not LocalPlayer:FindFirstChild("Backpack") then return end
+
+    local now = Webhook.snapshot()
+
+    if tick() < Webhook.quietUntil or not Webhook.Enabled or not Webhook.valid() then
+        Webhook.last = now -- update diam-diam, jangan kirim apa-apa
+        return
+    end
+
+    for name, count in pairs(now) do
+        local before = Webhook.last[name] or 0
+        if count > before then
+            Webhook.push(Webhook.itemEmbed(name, count - before))
+        end
+    end
+    Webhook.last = now
+end
+
+function Webhook.start()
+    if Webhook.started then return end
+    Webhook.started = true
+
+    Webhook.last = Webhook.snapshot()
+    Webhook.quietUntil = tick() + 3
+
+    LocalPlayer.CharacterAdded:Connect(function()
+        Webhook.quietUntil = tick() + 5
+    end)
+
+    task.spawn(function()
+        while true do
+            task.wait(Webhook.Interval)
+            pcall(Webhook.check)
+        end
+    end)
+end
+
+Webhook.load()
+
+-- ================= GUI =================
+-- Layout lebar + bertab (Farm / Gerak / Shop / Server) supaya gak panjang ke bawah.
+-- RightShift = sembunyikan / tampilkan GUI. "," = toggle ON/OFF farm.
+-- Semua widget dibuat lewat helper di tabel UI (hemat local, batas Luau 200).
+local GUI_TOGGLE_KEY = Enum.KeyCode.RightShift
+
+pcall(function()
+    local old = CoreGui:FindFirstChild("AutoEventDoorGui")
+    if old then old:Destroy() end
+end)
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "AutoEventDoorGui"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+pcall(function()
+    ScreenGui.Parent = CoreGui
+end)
+if not ScreenGui.Parent then
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+end
+
+local UI = {
+    C = {
+        bg = Color3.fromRGB(24, 24, 28),
+        bar = Color3.fromRGB(34, 34, 40),
+        panel = Color3.fromRGB(30, 30, 36),
+        input = Color3.fromRGB(46, 46, 54),
+        accent = Color3.fromRGB(60, 100, 170),
+        on = Color3.fromRGB(50, 160, 80),
+        off = Color3.fromRGB(180, 50, 50),
+        text = Color3.fromRGB(225, 225, 225),
+        dim = Color3.fromRGB(140, 140, 150),
+        candy = Color3.fromRGB(255, 180, 80),
+        white = Color3.fromRGB(255, 255, 255),
+    },
+    Pages = {},
+    Tabs = {},
+}
+
+function UI.corner(obj, radius)
+    Instance.new("UICorner", obj).CornerRadius = UDim.new(0, radius or 6)
+    return obj
+end
+
+function UI.label(parent, text, pos, size, color, font, textSize)
+    local l = Instance.new("TextLabel")
+    l.BackgroundTransparency = 1
+    l.Position = pos
+    l.Size = size
+    l.Text = text
+    l.TextColor3 = color or UI.C.text
+    l.Font = font or Enum.Font.Gotham
+    l.TextSize = textSize or 12
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.Parent = parent
+    return l
+end
+
+function UI.box(parent, pos, size, text, placeholder)
+    local box = Instance.new("TextBox")
+    box.Position = pos
+    box.Size = size
+    box.BackgroundColor3 = UI.C.input
+    box.TextColor3 = UI.C.white
+    box.PlaceholderText = placeholder or ""
+    box.PlaceholderColor3 = Color3.fromRGB(130, 130, 130)
+    box.Font = Enum.Font.Gotham
+    box.TextSize = 12
+    box.Text = tostring(text or "")
+    box.ClearTextOnFocus = false
+    box.TextXAlignment = Enum.TextXAlignment.Left
+    box.BorderSizePixel = 0
+    box.Parent = parent
+    UI.corner(box)
+    Instance.new("UIPadding", box).PaddingLeft = UDim.new(0, 6)
+    return box
+end
+
+function UI.button(parent, text, pos, size, color, textSize)
+    local b = Instance.new("TextButton")
+    b.Position = pos
+    b.Size = size
+    b.BackgroundColor3 = color
+    b.Text = text
+    b.TextColor3 = UI.C.white
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = textSize or 12
+    b.BorderSizePixel = 0
+    b.Parent = parent
+    UI.corner(b)
+    return b
+end
+
+-- Tombol ON/OFF. get() baca state, set(v) terapkan state baru.
+function UI.toggle(parent, pos, size, get, set, prefix)
+    local btn = UI.button(parent, "", pos, size, UI.C.off)
+    local function refresh()
+        local on = get()
+        btn.Text = (prefix or "") .. (on and "ON" or "OFF")
+        btn.BackgroundColor3 = on and UI.C.on or UI.C.off
+    end
+    btn.MouseButton1Click:Connect(function()
+        set(not get())
+        refresh()
+    end)
+    refresh()
+    return btn
+end
+
+function UI.page(name)
+    local f = Instance.new("Frame")
+    f.Name = name
+    f.BackgroundTransparency = 1
+    f.Size = UDim2.new(1, 0, 1, 0)
+    f.Visible = false
+    f.Parent = UI.Content
+    UI.Pages[name] = f
+    return f
+end
+
+function UI.select(name)
+    for n, f in pairs(UI.Pages) do f.Visible = (n == name) end
+    for n, b in pairs(UI.Tabs) do
+        b.BackgroundColor3 = (n == name) and UI.C.accent or UI.C.bar
+    end
+end
+
+-- Label + kotak angka (2 kolom per halaman). col: 0 = kiri, 1 = kanan
+function UI.pair(page, col, y, text, value)
+    local x = col * 0.5
+    UI.label(page, text, UDim2.new(x, 0, 0, y), UDim2.new(0.29, 0, 0, 26))
+    return UI.box(page, UDim2.new(x + 0.29, 0, 0, y), UDim2.new(0.19, 0, 0, 26), value)
+end
+
+function UI.rowLabel(page, y, text)
+    return UI.label(page, text, UDim2.new(0, 0, 0, y), UDim2.new(0.28, 0, 0, 26))
+end
+
+-- ---------- Frame utama ----------
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 440, 0, 320)
+MainFrame.Position = UDim2.new(0, 20, 0.5, -160)
+MainFrame.BackgroundColor3 = UI.C.bg
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+UI.corner(MainFrame, 8)
+
+do
+    local title = UI.label(MainFrame, "GPO Auto Event Door", UDim2.new(0, 0, 0, 0),
+        UDim2.new(1, 0, 0, 30), UI.C.white, Enum.Font.GothamBold, 14)
+    title.BackgroundTransparency = 0
+    title.BackgroundColor3 = UI.C.bar
+    title.BorderSizePixel = 0
+    Instance.new("UIPadding", title).PaddingLeft = UDim.new(0, 12)
+    UI.corner(title, 8)
+
+    local titleFix = Instance.new("Frame")
+    titleFix.Size = UDim2.new(1, 0, 0, 10)
+    titleFix.Position = UDim2.new(0, 0, 0, 20)
+    titleFix.BackgroundColor3 = UI.C.bar
+    titleFix.BorderSizePixel = 0
+    titleFix.ZIndex = 0
+    titleFix.Parent = MainFrame
+
+    local hint = UI.label(MainFrame, ",  ON/OFF   |   RShift  hide", UDim2.new(0, 0, 0, 0),
+        UDim2.new(1, -12, 0, 30), UI.C.dim, Enum.Font.Gotham, 11)
+    hint.TextXAlignment = Enum.TextXAlignment.Right
+end
+
+-- ---------- Info strip ----------
+StatusText = UI.label(MainFrame, "Status: OFF", UDim2.new(0, 12, 0, 36),
+    UDim2.new(1, -24, 0, 18), Color3.fromRGB(200, 200, 200), Enum.Font.Gotham, 13)
+
+ProgressLabel = UI.label(MainFrame, "Opened: 0/0", UDim2.new(0, 12, 0, 56),
+    UDim2.new(0.35, -12, 0, 18), UI.C.dim, Enum.Font.Gotham, 12)
+
+local CandyLabel = UI.label(MainFrame, "Candy: -/500", UDim2.new(0.35, 0, 0, 56),
+    UDim2.new(0.65, -12, 0, 18), UI.C.candy, Enum.Font.GothamBold, 12)
+
+-- ---------- Tab bar + area konten ----------
+do
+    local tabBar = Instance.new("Frame")
+    tabBar.BackgroundTransparency = 1
+    tabBar.Position = UDim2.new(0, 10, 0, 80)
+    tabBar.Size = UDim2.new(1, -20, 0, 26)
+    tabBar.Parent = MainFrame
+
+    for i, name in ipairs({"Farm", "Gerak", "Shop", "Server"}) do
+        local tab = UI.button(tabBar, name, UDim2.new(0.25 * (i - 1), 0, 0, 0),
+            UDim2.new(0.25, -4, 1, 0), UI.C.bar, 12)
+        tab.MouseButton1Click:Connect(function() UI.select(name) end)
+        UI.Tabs[name] = tab
+    end
+
+    local content = Instance.new("Frame")
+    content.BackgroundColor3 = UI.C.panel
+    content.BorderSizePixel = 0
+    content.Position = UDim2.new(0, 10, 0, 112)
+    content.Size = UDim2.new(1, -20, 0, 150)
+    content.Parent = MainFrame
+    UI.corner(content, 6)
+
+    local pad = Instance.new("UIPadding", content)
+    pad.PaddingLeft = UDim.new(0, 10)
+    pad.PaddingRight = UDim.new(0, 10)
+    pad.PaddingTop = UDim.new(0, 10)
+    pad.PaddingBottom = UDim.new(0, 10)
+
+    UI.Content = content
+end
+
+local CooldownBox, ChestTriggerBox, MerchantItemsBox
+
+-- ---------- Tab: Farm ----------
+do
+    local page = UI.page("Farm")
+    RadiusBox = UI.pair(page, 0, 0, "Radius:", Settings.SearchRadius)
+    DurationBox = UI.pair(page, 0, 34, "Fire Prompt (s):", Settings.HoldDuration)
+    CooldownBox = UI.pair(page, 1, 0, "Cooldown (s):", Settings.DoorCooldown)
+    CandyTargetBox = UI.pair(page, 1, 34, "Candy Target:", Settings.CandyTarget)
+
+    UI.label(page, "Geppo di door:", UDim2.new(0, 0, 0, 68), UDim2.new(0.29, 0, 0, 26))
+    UI.toggle(page, UDim2.new(0.29, 0, 0, 68), UDim2.new(0.19, 0, 0, 26),
+        function() return Settings.DoorGeppo end,
+        function(v) Settings.DoorGeppo = v end)
+end
+
+-- ---------- Tab: Gerak ----------
+do
+    local page = UI.page("Gerak")
+
+    UI.rowLabel(page, 0, "WalkSpeed:")
+    SpeedBox = UI.box(page, UDim2.new(0.28, 0, 0, 0), UDim2.new(0.24, 0, 0, 26), Settings.WalkSpeed)
+    UI.toggle(page, UDim2.new(0.54, 0, 0, 0), UDim2.new(0.22, 0, 0, 26),
+        function() return Settings.WalkSpeedEnabled end,
+        function(v)
+            Settings.WalkSpeedEnabled = v
+            if v then
+                local s = tonumber(SpeedBox.Text)
+                if s and s > 0 then
+                    Settings.WalkSpeed = s
+                    Humanoid.WalkSpeed = s
+                end
+            else
+                Humanoid.WalkSpeed = 16 -- balikin ke default Roblox
+            end
+        end)
+
+    UI.rowLabel(page, 34, "Tween Speed:")
+    TweenSpeedBox = UI.box(page, UDim2.new(0.28, 0, 0, 34), UDim2.new(0.24, 0, 0, 26), Settings.TweenSpeed)
+    UI.toggle(page, UDim2.new(0.54, 0, 0, 34), UDim2.new(0.22, 0, 0, 26),
+        function() return Settings.TweenMode end,
+        function(v) Settings.TweenMode = v end)
+
+    UI.rowLabel(page, 68, "Geppo tween:")
+    UI.toggle(page, UDim2.new(0.28, 0, 0, 68), UDim2.new(0.24, 0, 0, 26),
+        function() return Settings.GeppoPass end,
+        function(v) Settings.GeppoPass = v end)
+
+    UI.label(page, "Tween ON = gerak lewat BodyVelocity, OFF = tahan WASD",
+        UDim2.new(0, 0, 0, 104), UDim2.new(1, 0, 0, 18), UI.C.dim, Enum.Font.Gotham, 11)
+end
+
+-- ---------- Tab: Shop ----------
+do
+    local page = UI.page("Shop")
+
+    UI.rowLabel(page, 0, "Buka Chest di:")
+    ChestTriggerBox = UI.box(page, UDim2.new(0.28, 0, 0, 0), UDim2.new(0.24, 0, 0, 26), Settings.ChestOpenAt)
+    UI.label(page, "(0 = mati)", UDim2.new(0.54, 0, 0, 0), UDim2.new(0.4, 0, 0, 26), UI.C.dim, Enum.Font.Gotham, 11)
+
+    UI.rowLabel(page, 34, "Auto Merchant:")
+    UI.toggle(page, UDim2.new(0.28, 0, 0, 34), UDim2.new(0.24, 0, 0, 26),
+        function() return Settings.AutoMerchant end,
+        function(v) Settings.AutoMerchant = v end)
+
+    UI.rowLabel(page, 68, "Item merchant:")
+    MerchantItemsBox = UI.box(page, UDim2.new(0.28, 0, 0, 68), UDim2.new(0.72, 0, 0, 26),
+        Settings.MerchantItems, "Nama item, pisah koma")
+end
+
+-- ---------- Tab: Server (private server + webhook) ----------
+do
+    local page = UI.page("Server")
+
+    UI.rowLabel(page, 0, "Private Code:")
+    PrivateServer.CodeBox = UI.box(page, UDim2.new(0.28, 0, 0, 0), UDim2.new(0.42, -4, 0, 26), PrivateServer.Code)
+    UI.toggle(page, UDim2.new(0.70, 0, 0, 0), UDim2.new(0.30, 0, 0, 26),
+        function() return PrivateServer.Enabled end,
+        function(v)
+            PrivateServer.Enabled = v
+            PrivateServer.Code = PrivateServer.CodeBox.Text:match("^%s*(.-)%s*$") or ""
+            PrivateServer.save()
+        end, "Join: ")
+
+    UI.rowLabel(page, 34, "Webhook URL:")
+    Webhook.UrlBox = UI.box(page, UDim2.new(0.28, 0, 0, 34), UDim2.new(0.72, 0, 0, 26),
+        Webhook.Url, "https://discord.com/api/webhooks/...")
+
+    UI.rowLabel(page, 68, "Webhook item:")
+    UI.toggle(page, UDim2.new(0.28, 0, 0, 68), UDim2.new(0.34, -4, 0, 26),
+        function() return Webhook.Enabled end,
+        function(v)
+            Webhook.Enabled = v
+            Webhook.Url = Webhook.trim(Webhook.UrlBox.Text)
+            Webhook.save()
+        end)
+
+    local test = UI.button(page, "Test", UDim2.new(0.64, 0, 0, 68), UDim2.new(0.36, 0, 0, 26), UI.C.accent)
+    test.MouseButton1Click:Connect(function()
+        Webhook.Url = Webhook.trim(Webhook.UrlBox.Text)
+        Webhook.save()
+        if not Webhook.valid() then
+            print("[AutoEventDoor] Webhook URL belum valid (harus https://discord.com/api/webhooks/<id>/<token>).")
+            return
+        end
+        Webhook.push(Webhook.embed("Test Webhook", "Webhook terhubung.", 3447003))
+    end)
+end
+
+UI.select("Farm")
+
+-- ---------- Bar bawah: ON/OFF + Apply ----------
+ToggleButton = UI.button(MainFrame, "OFF", UDim2.new(0, 10, 1, -44), UDim2.new(0.62, -14, 0, 34), UI.C.off, 14)
+
+local ApplyButton = UI.button(MainFrame, "Apply Settings", UDim2.new(0.62, 2, 1, -44),
+    UDim2.new(0.38, -12, 0, 34), UI.C.accent, 13)
+
+local function updateGuiState()
+    if Enabled then
+        StatusText.Text = "Status: ON" .. (StatusExtra ~= "" and (" - " .. StatusExtra) or "")
+        ToggleButton.Text = "ON"
+        ToggleButton.BackgroundColor3 = UI.C.on
+    else
+        StatusText.Text = "Status: OFF"
+        ToggleButton.Text = "OFF"
+        ToggleButton.BackgroundColor3 = UI.C.off
+    end
+
+    -- "Opened" = jumlah door yang lagi cooldown (udah dikunjungi & belum siap lagi)
+    local count = 0
+    local nowTick = tick()
+    for door in pairs(LastVisit) do
+        if door.Parent and nowTick < getDoorReadyAt(door) then
+            count = count + 1
+        end
+    end
+    local total = math.max(LastKnownDoorCount, count)
+    ProgressLabel.Text = "Opened: " .. count .. "/" .. total
+
+    CandyLabel.Text = getCandyText()
+end
+
+local function applySettings()
+    local r = tonumber(RadiusBox.Text)
+    local d = tonumber(DurationBox.Text)
+    local s = tonumber(SpeedBox.Text)
+    local ts = tonumber(TweenSpeedBox.Text)
+    local ct = tonumber(CandyTargetBox.Text)
+    local cd = tonumber(CooldownBox.Text)
+    local cr = tonumber(ChestTriggerBox.Text)
+    Settings.MerchantItems = MerchantItemsBox.Text
+
+    -- Kode private server: simpan ke file/getgenv biar kebaca di main menu
+    PrivateServer.Code = PrivateServer.CodeBox.Text:match("^%s*(.-)%s*$") or ""
+    PrivateServer.save()
+
+    -- Webhook Discord
+    Webhook.Url = Webhook.trim(Webhook.UrlBox.Text)
+    Webhook.save()
+
+    if cr and cr >= 0 then Settings.ChestOpenAt = math.floor(cr) end
+
+    if ts and ts > 0 then Settings.TweenSpeed = ts end
+    if ct and ct > 0 then Settings.CandyTarget = math.floor(ct) end
+    if cd and cd >= 0 then Settings.DoorCooldown = cd end
+    if r and r > 0 then Settings.SearchRadius = r end
+    if d and d > 0 then Settings.HoldDuration = d end
+    if s and s > 0 then
+        Settings.WalkSpeed = s
+        if Settings.WalkSpeedEnabled then
+            Humanoid.WalkSpeed = s
+        end
+    end
+
+    RadiusBox.Text = tostring(Settings.SearchRadius)
+    DurationBox.Text = tostring(Settings.HoldDuration)
+    SpeedBox.Text = tostring(Settings.WalkSpeed)
+    TweenSpeedBox.Text = tostring(Settings.TweenSpeed)
+    CandyTargetBox.Text = tostring(Settings.CandyTarget)
+    CooldownBox.Text = tostring(Settings.DoorCooldown)
+    ChestTriggerBox.Text = tostring(Settings.ChestOpenAt)
+    PrivateServer.CodeBox.Text = PrivateServer.Code
+    Webhook.UrlBox.Text = Webhook.Url
+
+    updateGuiState()
+end
+
+ApplyButton.MouseButton1Click:Connect(applySettings)
+
+-- Kotak angka: Enter = apply. Kotak teks panjang (kode / URL): apply tiap fokus lepas
+-- (biasanya di-paste lalu klik di luar).
+for _, box in ipairs({RadiusBox, DurationBox, SpeedBox, TweenSpeedBox, CandyTargetBox, CooldownBox, ChestTriggerBox}) do
+    box.FocusLost:Connect(function(enterPressed)
+        if enterPressed then applySettings() end
+    end)
+end
+PrivateServer.CodeBox.FocusLost:Connect(function() applySettings() end)
+Webhook.UrlBox.FocusLost:Connect(function() applySettings() end)
+MerchantItemsBox.FocusLost:Connect(function()
+    Settings.MerchantItems = MerchantItemsBox.Text
+end)
+
+-- RightShift: sembunyikan / tampilkan GUI (script tetap jalan)
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == GUI_TOGGLE_KEY then
+        MainFrame.Visible = not MainFrame.Visible
+        print("[AutoEventDoor] GUI " .. (MainFrame.Visible and "ditampilkan"
+            or "disembunyikan (tekan RightShift untuk menampilkan lagi)"))
+    end
+end)
+
+-- ================= Core Logic =================
+local function getBuildingFolder()
+    local folder = workspace
+    for _, name in ipairs(BUILDING_PATH) do
+        folder = folder:FindFirstChild(name)
+        if not folder then return nil end
+    end
+    return folder
+end
+
+local function getDoorPosition(door)
+    if door:IsA("BasePart") then
+        return door.Position
+    elseif door:IsA("Model") then
+        if door.PrimaryPart then
+            return door.PrimaryPart.Position
+        end
+        local part = door:FindFirstChildWhichIsA("BasePart", true)
+        if part then return part.Position end
+    else
+        -- Accessory / Folder / instance lain: ambil BasePart pertama di dalamnya
+        local part = door:FindFirstChildWhichIsA("BasePart", true)
+        if part then return part.Position end
+    end
+    return nil
+end
+
+local function getAllEventDoors()
+    local building = getBuildingFolder()
+    if not building then return {} end
+
+    local doors = {}
+    for index, child in ipairs(building:GetChildren()) do
+        local door = child:FindFirstChild(EVENT_DOOR_CHILD_NAME)
+        if door then
+            if IGNORED_DOOR_INDEXES[index] or IGNORED_DOOR_NAMES[child.Name] then
+                -- Door di-ignore: print sekali biar kelihatan yang mana yang ke-skip
+                if not IgnoredDoorPrinted[child] then
+                    IgnoredDoorPrinted[child] = true
+                    print("[AutoEventDoor] Ignore door #" .. index .. " (" .. child:GetFullName() .. ")")
+                end
+            else
+                table.insert(doors, door)
+            end
+        end
+    end
+
+    LastKnownDoorCount = #doors -- simpen buat progress label "Opened: x/total"
+    return doors
+end
+
+-- Pilih door berikutnya:
+--  1) Door yang SUDAH SIAP (belum pernah dikunjungi / cooldown udah abis):
+--     yang terdekat dalam SearchRadius dulu, kalau gak ada yang terdekat tanpa batas radius.
+--  2) Kalau SEMUA door masih cooldown: pilih door yang cooldown-nya paling duluan abis.
+--     Itu door yang paling dulu dikunjungi (= "balik ke door pertama"). Caller
+--     jalan ke sana lalu nunggu sampai siap.
+local function findNextEventDoor()
+    local doors = getAllEventDoors()
+    local originPos = RootPart.Position
+    local now = tick()
+
+    local nearestInRadius, nearestInRadiusDist = nil, math.huge
+    local nearestAny, nearestAnyDist = nil, math.huge
+
+    for _, door in ipairs(doors) do
+        if now >= getDoorReadyAt(door) then
+            local pos = getDoorPosition(door)
+            if pos then
+                local dist = (pos - originPos).Magnitude
+                if dist <= Settings.SearchRadius and dist < nearestInRadiusDist then
+                    nearestInRadius = door
+                    nearestInRadiusDist = dist
+                end
+                if dist < nearestAnyDist then
+                    nearestAny = door
+                    nearestAnyDist = dist
+                end
+            end
+        end
+    end
+
+    if nearestInRadius then return nearestInRadius end
+    if nearestAny then return nearestAny end
+
+    -- Semua door lagi cooldown: ambil yang paling cepat siap
+    local soonest, soonestAt = nil, math.huge
+    for _, door in ipairs(doors) do
+        if getDoorPosition(door) then
+            local readyAt = getDoorReadyAt(door)
+            if readyAt < soonestAt then
+                soonest = door
+                soonestAt = readyAt
+            end
+        end
+    end
+
+    return soonest
+end
+
+-- ============ Deteksi STUN ============
+-- LocalPlayer.StunFolder.Stun aktif pas karakter lagi kena stun (animasi ambil
+-- candy, diculik, dll). Dipakai buat nunggu animasi selesai di ANTARA aksi
+-- (mis. abis fire prompt door). TWEEN gak ikut berhenti kena stun/hit.
+-- Tipe instance "Stun" belum pasti, jadi dicek fleksibel:
+--   Bool -> true = stun | Number/Int -> > 0 | String -> gak kosong |
+--   Folder/Configuration -> punya child | tipe lain -> ada = stun
+local STUN_MAX_WAIT = 25 -- detik, batas nunggu stun (pengaman kalau deteksi salah)
+local StunDebugPrinted = false
+
+local function isStunned()
+    local folder = LocalPlayer:FindFirstChild("StunFolder")
+    local stun = folder and folder:FindFirstChild("Stun")
+    if not stun then return false end
+
+    if not StunDebugPrinted then
+        StunDebugPrinted = true
+        print("[AutoEventDoor] StunFolder.Stun ketemu, tipe: " .. stun.ClassName)
+    end
+
+    if stun:IsA("BoolValue") then return stun.Value end
+    if stun:IsA("NumberValue") or stun:IsA("IntValue") then return stun.Value > 0 end
+    if stun:IsA("StringValue") then return stun.Value ~= "" end
+    if stun:IsA("ValueBase") then return stun.Value ~= nil end
+    if stun:IsA("Folder") or stun:IsA("Configuration") then
+        return #stun:GetChildren() > 0
+    end
+    return true
+end
+
+-- Tunggu sampai stun habis. Return: true kalau tadi sempat stun
+local function waitUntilNotStunned()
+    if not isStunned() then return false end
+
+    local start = tick()
+    while Enabled and isStunned() do
+        StatusExtra = string.format("stun %.1fs", tick() - start)
+        updateGuiState()
+
+        if tick() - start >= STUN_MAX_WAIT then
+            print("[AutoEventDoor] Stun lebih dari " .. STUN_MAX_WAIT .. " detik, lanjut paksa.")
+            break
+        end
+        task.wait(0.1)
+    end
+
+    StatusExtra = ""
+    updateGuiState()
+    task.wait(0.15) -- jeda kecil biar kontrol karakter balik normal
+    return true
+end
+
+-- ============ Trigger ProximityPrompt event door ============
+-- Target: <door>.Frame.ProximityPrompt
+-- (door = workspace.Islands.Spooksville.Building:GetChildren()[i].eventDoor)
+
+local function getDoorPrompt(door)
+    local frame = door and door:FindFirstChild("Frame")
+    if not frame then return nil end
+
+    local prompt = frame:FindFirstChild("ProximityPrompt")
+    if prompt and prompt:IsA("ProximityPrompt") then
+        return prompt
+    end
+
+    -- Jaga-jaga kalau prompt-nya ada di dalam child lain di Frame
+    return frame:FindFirstChildWhichIsA("ProximityPrompt", true)
+end
+
+-- Fallback kalau executor gak punya fireproximityprompt: tap E manual
+local function tapKeyE()
+    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+    task.wait(0.05)
+    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+    task.wait(0.05)
+end
+
+-- Aktifin prompt event door berulang-ulang selama `duration` detik.
+-- Return: true kalau prompt ketemu & dipicu minimal sekali
+local function triggerDoorPrompt(door, duration)
+    local prompt = getDoorPrompt(door)
+    if not prompt then
+        print("[AutoEventDoor] ProximityPrompt gak ketemu di eventDoor.Frame, fallback ke tombol E.")
+        local startTime = tick()
+        while Enabled and (tick() - startTime) < duration do
+            tapKeyE()
+        end
+        return false
+    end
+
+    -- Kalau lagi stun (mis. sisa animasi sebelumnya), tunggu dulu
+    waitUntilNotStunned()
+
+    local startTime = tick()
+    local fired = false
+
+    while Enabled and prompt.Parent and (tick() - startTime) < duration do
+        if typeof(fireproximityprompt) == "function" then
+            -- Langsung trigger prompt, gak perlu tahan E & gak peduli jarak/hold duration
+            local ok = pcall(fireproximityprompt, prompt)
+            fired = fired or ok
+            task.wait(0.1)
+        else
+            -- Executor gak support: pakai API bawaan Roblox (hold sesuai HoldDuration prompt)
+            local ok = pcall(function()
+                prompt:InputHoldBegin()
+                task.wait(math.max(prompt.HoldDuration, 0.05) + 0.05)
+                prompt:InputHoldEnd()
+            end)
+            fired = fired or ok
+            if not ok then
+                tapKeyE()
+            end
+        end
+
+        -- Stun mulai setelah fire = prompt sudah kena (animasi ambil candy /
+        -- diculik). Berhenti spam, caller yang nunggu stun habis.
+        if fired and isStunned() then
+            break
+        end
+    end
+
+    return fired
+end
+
+-- ====================================================================
+-- NAV v2 - PATHFINDING (WASD relatif kamera / tween BodyVelocity)
+-- ====================================================================
+
+-- ============ Input (WASD relatif kamera) ============
+local HeldKeys = {
+    [Enum.KeyCode.W] = false,
+    [Enum.KeyCode.A] = false,
+    [Enum.KeyCode.S] = false,
+    [Enum.KeyCode.D] = false,
+}
+
+local function setKeyHeld(keyCode, shouldHold)
+    if HeldKeys[keyCode] == shouldHold then return end
+    HeldKeys[keyCode] = shouldHold
+    VirtualInputManager:SendKeyEvent(shouldHold, keyCode, false, game)
+end
+
+local function releaseAllMoveKeys()
+    for key in pairs(HeldKeys) do
+        setKeyHeld(key, false)
+    end
+end
+
+local function enableMovementMode()
+    -- AutoRotate dibiarkan default (true)
+end
+
+local function disableMovementMode()
+    releaseAllMoveKeys()
+end
+
+-- ============ Indikator arah (visual aja) ============
+-- Part indikator ditaruh di workspace (bukan di Character) supaya tetap hidup
+-- setelah respawn.
+local IndicatorBeam
+do
+    local originPart = Instance.new("Part")
+    originPart.Name = "AutoEventDoorIndicatorOrigin"
+    originPart.Size = Vector3.new(0.2, 0.2, 0.2)
+    originPart.Transparency = 1
+    originPart.CanCollide = false
+    originPart.CanQuery = false
+    originPart.CanTouch = false
+    originPart.Anchored = true
+    originPart.CFrame = RootPart.CFrame
+    originPart.Parent = workspace
+
+    RunService.Heartbeat:Connect(function()
+        if RootPart and RootPart.Parent then
+            originPart.CFrame = RootPart.CFrame
+        end
+    end)
+
+    local targetPart = Instance.new("Part")
+    targetPart.Name = "AutoEventDoorIndicatorTarget"
+    targetPart.Size = Vector3.new(0.2, 0.2, 0.2)
+    targetPart.Transparency = 1
+    targetPart.CanCollide = false
+    targetPart.CanQuery = false
+    targetPart.CanTouch = false
+    targetPart.Anchored = true
+    targetPart.Parent = workspace
+
+    local att0 = Instance.new("Attachment", originPart)
+    local att1 = Instance.new("Attachment", targetPart)
+
+    local beam = Instance.new("Beam")
+    beam.Attachment0 = att0
+    beam.Attachment1 = att1
+    beam.Width0 = 0.3
+    beam.Width1 = 0.3
+    beam.Color = ColorSequence.new(Color3.fromRGB(255, 230, 0))
+    beam.Transparency = NumberSequence.new(0.3)
+    beam.FaceCamera = true
+    beam.Enabled = false
+    beam.Parent = originPart
+
+    IndicatorBeam = { beam = beam, targetPart = targetPart }
+end
+
+local function showDirectionIndicator(targetPos)
+    IndicatorBeam.targetPart.Position = targetPos
+    IndicatorBeam.beam.Enabled = true
+end
+
+local function hideDirectionIndicator()
+    IndicatorBeam.beam.Enabled = false
+end
+
+-- ============ Geppo / Sky Walk (dipanggil dari tween & mainLoop) ============
+local function fireGeppoOnce()
+    pcall(function()
+        local char = LocalPlayer.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+
+        local statsFolder = ReplicatedStorage:FindFirstChild("Stats" .. LocalPlayer.Name)
+        local stats = statsFolder and statsFolder:FindFirstChild("Stats")
+        local skills = statsFolder and statsFolder:FindFirstChild("Skills")
+        local events = ReplicatedStorage:FindFirstChild("Events")
+        local skill = events and events:FindFirstChild("Skill")
+        if not skill then return end
+
+        local cf = CFrame.lookAt(root.Position, root.Position + root.CFrame.LookVector + Vector3.new(0, 5, 0))
+        local style = stats and stats:FindFirstChild("FightingStyle") and stats.FightingStyle.Value
+
+        if style == "Rokushiki" then
+            skill:InvokeServer("Geppo", {char = char, cf = cf})
+        elseif style == "BlackLeg" then
+            skill:InvokeServer("Sky Walk", {char = char, cf = cf})
+        elseif style == "Kamishiki" then
+            skill:InvokeServer("KamishikiGeppo", {char = char, cf = cf})
+        elseif skills and skills:FindFirstChild("skyWalk") and skills.skyWalk.Value == true then
+            skill:InvokeServer("Sky Walk2", {char = char, cf = cf})
+        end
+    end)
+end
+
+-- ============ NAV ============
+local Nav = {
+    -- path
+    Variants = {},          -- diisi di bawah (urutan percobaan AgentRadius)
+    MaxAttempts = 3,        -- hitung ulang path dari posisi sekarang sampai sekian kali
+    MinGap = 6,             -- waypoint lebih rapat dari ini dibuang (kecuali belokan/lompat)
+    TurnAngle = 35,         -- derajat; belokan setajam ini wajib dipertahankan
+    -- arrival
+    ReachFlat = 4.5,        -- jarak datar waypoint tengah dianggap kena (mode WASD)
+    ReachFinal = 3,         -- jarak datar waypoint terakhir (mode WASD)
+    PointArrive = 4,        -- target non-pintu (Witch/Merchant): jarak datar dianggap sampai
+    DoorStandOffset = 5,    -- titik berdiri di depan/belakang pintu (stud)
+    -- mode WASD
+    SegTimeout = 8,         -- detik maksimal per waypoint
+    StuckInterval = 0.6,
+    StuckDist = 1.0,
+    MaxStrikes = 3,
+    -- roof escape
+    MinGroundY = 3,         -- permukaan di bawah ini dianggap air/bukan tujuan
+    MaxExitPaths = 16,      -- maksimal kandidat titik keluar yang di-path
+    -- tween
+    TweenStop = 2.5,
+    TweenReachMid = 3.5,
+    GroundFollow = true,
+    GroundGain = 12,
+    ProgressInterval = 0.8,
+    MinProgress = 1.5,
+    NearFlat = 4,
+    MaxStuckChecks = 3,     -- cek progress berturut-turut tanpa kemajuan = tween nyerah (path dihitung ulang)
+}
+
+function Nav.agent(radius)
+    return {
+        AgentRadius = radius,
+        AgentHeight = 5,
+        AgentCanJump = true,
+        AgentJumpHeight = 7,
+        AgentMaxSlope = 45,
+        WaypointSpacing = 8,
+    }
+end
+
+Nav.Variants = { Nav.agent(3), Nav.agent(2), Nav.agent(1.5) }
+
+-- ---------- util raycast ----------
+function Nav.worldIgnore()
+    local list = {}
+    for _, name in ipairs({"PlayerCharacters", "NPCs", "Effects"}) do
+        local folder = workspace:FindFirstChild(name)
+        if folder then table.insert(list, folder) end
+    end
+    return list
+end
+
+function Nav.rayParams(extra)
+    local p = RaycastParams.new()
+    p.FilterType = Enum.RaycastFilterType.Exclude
+    p.IgnoreWater = true
+    pcall(function() p.RespectCanCollide = true end)
+    local list = { LocalPlayer.Character }
+    if extra then
+        for _, v in ipairs(extra) do table.insert(list, v) end
+    end
+    p.FilterDescendantsInstances = list
+    return p
+end
+
+-- Y permukaan di bawah `pos`. Model ber-Humanoid (monster/pemain) & part script ini diabaikan.
+function Nav.groundY(pos, length, params)
+    length = length or 80
+    params = params or Nav.rayParams(Nav.worldIgnore())
+    local ignore = params.FilterDescendantsInstances
+    for _ = 1, 5 do
+        params.FilterDescendantsInstances = ignore
+        local result = workspace:Raycast(pos, Vector3.new(0, -length, 0), params)
+        if not result then return nil end
+
+        local inst = result.Instance
+        local model = inst:FindFirstAncestorOfClass("Model")
+        if string.sub(inst.Name, 1, 13) == "AutoEventDoor" then
+            table.insert(ignore, inst)
+        elseif model and model:FindFirstChildOfClass("Humanoid") then
+            table.insert(ignore, model)
+        else
+            return result.Position.Y
+        end
+    end
+    return nil
+end
+
+function Nav.standingHeight(hum, root)
+    if hum.RigType == Enum.HumanoidRigType.R6 then return 3 end
+    return hum.HipHeight + root.Size.Y / 2
+end
+
+function Nav.isCovered(pos)
+    local r = workspace:Raycast(pos, Vector3.new(0, 200, 0), Nav.rayParams(Nav.worldIgnore()))
+    return r ~= nil
+end
+
+-- Garis pandang ke pintu: kosong, atau yang kena memang bagian pintu itu sendiri
+function Nav.canSee(target, targetPos)
+    local origin = RootPart.Position + Vector3.new(0, 1.5, 0)
+    local r = workspace:Raycast(origin, targetPos - origin, Nav.rayParams(Nav.worldIgnore()))
+    return r == nil or r.Instance:IsDescendantOf(target)
+end
+
+function Nav.jump()
+    pcall(function() Humanoid.Jump = true end)
+end
+
+-- ---------- path ----------
+-- Return: waypoints, path   (nil kalau semua varian gagal)
+function Nav.computePath(fromPos, toPos, maxVariants)
+    local n = math.min(maxVariants or #Nav.Variants, #Nav.Variants)
+    for i = 1, n do
+        local path = PathfindingService:CreatePath(Nav.Variants[i])
+        local ok = pcall(function()
+            path:ComputeAsync(fromPos, toPos)
+        end)
+        if ok and path.Status == Enum.PathStatus.Success then
+            return path:GetWaypoints(), path
+        end
+    end
+    return nil
+end
+
+function Nav.pathLength(waypoints)
+    local len, prev = 0, RootPart.Position
+    for _, w in ipairs(waypoints) do
+        len = len + (w.Position - prev).Magnitude
+        prev = w.Position
+    end
+    return len
+end
+
+-- Buang waypoint yang terlalu rapat, tapi belokan tajam & titik lompat selalu dipertahankan
+function Nav.filter(waypoints)
+    local out = {}
+    local last = RootPart.Position
+    local lastDir = nil
+
+    for i, wp in ipairs(waypoints) do
+        local gap = (wp.Position - last).Magnitude
+        local isLast = (i == #waypoints)
+        local isJump = wp.Action == Enum.PathWaypointAction.Jump
+
+        local sharp = false
+        if lastDir and gap > 0.1 then
+            local d = (wp.Position - last).Unit
+            local angle = math.deg(math.acos(math.clamp(lastDir:Dot(d), -1, 1)))
+            sharp = angle >= Nav.TurnAngle
+        end
+
+        if isLast or isJump or sharp or gap >= Nav.MinGap then
+            if gap > 0.1 then lastDir = (wp.Position - last).Unit end
+            table.insert(out, wp)
+            last = wp.Position
+        end
+    end
+    return out
+end
+
+-- Titik berdiri di depan & belakang pintu (pivot +/- LookVector * offset), di-snap ke lantai
+function Nav.doorGoals(door)
+    local pivot
+    pcall(function() pivot = door:GetPivot() end)
+    if not pivot then return {} end
+
+    local look = Vector3.new(pivot.LookVector.X, 0, pivot.LookVector.Z)
+    if look.Magnitude < 0.1 then return {} end
+    look = look.Unit
+
+    local goals = {}
+    for _, sign in ipairs({1, -1}) do
+        local p = pivot.Position + look * (Nav.DoorStandOffset * sign)
+        local gy = Nav.groundY(p + Vector3.new(0, 2, 0), 30)
+        table.insert(goals, gy and Vector3.new(p.X, gy, p.Z) or p)
+    end
+    return goals
+end
+
+-- Dari beberapa kandidat tujuan, pilih yang path-nya ada & paling pendek
+-- Return: goal, waypoints, path
+function Nav.pickGoal(goals)
+    local best, bestWps, bestPath, bestLen
+    for _, g in ipairs(goals) do
+        local wps, path = Nav.computePath(RootPart.Position, g)
+        if wps then
+            local len = Nav.pathLength(wps)
+            if not bestLen or len < bestLen then
+                best, bestWps, bestPath, bestLen = g, wps, path, len
+            end
+        end
+    end
+    return best, bestWps, bestPath
+end
+
+-- ---------- driver 1: WASD ----------
+-- Tombol relatif ke kamera (kamera cuma dibaca, tidak pernah diputar)
+function Nav.steer(targetPos)
+    local camera = workspace.CurrentCamera
+    if not camera then
+        releaseAllMoveKeys()
+        return
+    end
+
+    local o = RootPart.Position
+    local flat = Vector3.new(targetPos.X - o.X, 0, targetPos.Z - o.Z)
+    if flat.Magnitude < 0.1 then
+        releaseAllMoveKeys()
+        return
+    end
+
+    local obj = camera.CFrame:VectorToObjectSpace(flat.Unit)
+    setKeyHeld(Enum.KeyCode.W, obj.Z < -0.15)
+    setKeyHeld(Enum.KeyCode.S, obj.Z > 0.15)
+    setKeyHeld(Enum.KeyCode.D, obj.X > 0.15)
+    setKeyHeld(Enum.KeyCode.A, obj.X < -0.15)
+end
+
+function Nav.unstick(strike)
+    releaseAllMoveKeys()
+    Nav.jump()
+    task.wait(0.25)
+    if strike <= 1 then return end
+
+    setKeyHeld(Enum.KeyCode.S, true)
+    task.wait(0.4)
+    setKeyHeld(Enum.KeyCode.S, false)
+
+    local key = (strike % 2 == 0) and Enum.KeyCode.D or Enum.KeyCode.A
+    setKeyHeld(key, true)
+    task.wait(0.5)
+    setKeyHeld(key, false)
+
+    Nav.jump()
+    task.wait(0.2)
+end
+
+-- Return: "Arrived" | "Finished" | "Blocked" | "Stuck" | "Stopped"
+function Nav.followWalk(waypoints, isDone, state)
+    local i, n = 1, #waypoints
+    local segStart = tick()
+    local lastPos, lastCheck = RootPart.Position, tick()
+    local strikes = 0
+    local jumped = false
+
+    local function finish(status)
+        releaseAllMoveKeys()
+        hideDirectionIndicator()
+        return status
+    end
+
+    while Enabled do
+        if isDone() then return finish("Arrived") end
+        if state and state.blocked then return finish("Blocked") end
+        if i > n then return finish("Finished") end
+
+        -- Stun: lepas tombol, tunggu, jangan dihitung sebagai macet
+        if isStunned() then
+            releaseAllMoveKeys()
+            local t0 = tick()
+            waitUntilNotStunned()
+            segStart = segStart + (tick() - t0)
+            lastPos, lastCheck, strikes = RootPart.Position, tick(), 0
+            continue
+        end
+
+        local wp = waypoints[i]
+        local pos = RootPart.Position
+        local flatDist = Vector3.new(wp.Position.X - pos.X, 0, wp.Position.Z - pos.Z).Magnitude
+        local reach = (i == n) and Nav.ReachFinal or Nav.ReachFlat
+
+        -- Waypoint bertanda Jump: lompat sekali begitu sudah dekat
+        if wp.Action == Enum.PathWaypointAction.Jump and not jumped and flatDist <= 8 then
+            jumped = true
+            Nav.jump()
+        end
+
+        -- Kena: langsung lanjut ke waypoint berikutnya TANPA lepas tombol (gak ada patah-patah)
+        if flatDist <= reach then
+            i = i + 1
+            segStart, jumped, strikes = tick(), false, 0
+            lastPos, lastCheck = RootPart.Position, tick()
+            continue
+        end
+
+        if (tick() - segStart) > Nav.SegTimeout then
+            return finish("Stuck")
+        end
+
+        RunService.Heartbeat:Wait()
+        Nav.steer(wp.Position)
+        showDirectionIndicator(wp.Position)
+
+        if tick() - lastCheck >= Nav.StuckInterval then
+            if (RootPart.Position - lastPos).Magnitude < Nav.StuckDist then
+                strikes = strikes + 1
+                if strikes >= Nav.MaxStrikes then return finish("Stuck") end
+                Nav.unstick(strikes)
+            else
+                strikes = 0
+            end
+            lastPos, lastCheck = RootPart.Position, tick()
+        end
+    end
+
+    return finish("Stopped")
+end
+
+-- ---------- driver 2: tween fisika (BodyVelocity + BodyGyro) ----------
+-- Satu BodyVelocity untuk SELURUH rangkaian titik (gak dibuat-hancurin tiap waypoint),
+-- jadi jalannya mulus. Horizontal ke titik aktif, tinggi ngikutin lantai di bawah
+-- (kecuali waypoint-nya lebih tinggi = tangga/ledge). TANPA noclip: kalau gak ada
+-- progress beberapa kali berturut-turut, tween berhenti dengan reason "stuck" dan
+-- goTo menghitung ulang path dari posisi sekarang. Selama stun, watchdog dijeda.
+-- Return: reachedFinal(bool), reason(string)
+function Nav.tweenAlong(points, timeout, isDone, state)
+    local root, hum = RootPart, Humanoid
+    if not root or not root.Parent or not hum or not hum.Parent or #points == 0 then
+        return false, "invalid"
+    end
+
+    timeout = timeout or 12
+    local standH = Nav.standingHeight(hum, root)
+    local up = Vector3.new(0, standH, 0)
+    local n = #points
+    local idx = 1
+    local groundParams = Nav.rayParams(Nav.worldIgnore())
+
+    showDirectionIndicator(points[1] + up)
+
+    local gyro = Instance.new("BodyGyro")
+    gyro.Name = "EvDoorTweenGyro"
+    gyro.P = 200000
+    gyro.D = 1000
+    gyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+    gyro.CFrame = root.CFrame
+    gyro.Parent = root
+
+    local vel = Instance.new("BodyVelocity")
+    vel.Name = "EvDoorTweenVel"
+    vel.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+    vel.Velocity = Vector3.zero
+    vel.Parent = root
+
+    hum.PlatformStand = true
+    hum.AutoRotate = false
+
+    local startTime = tick()
+    local reached, reason = false, "timeout"
+
+    local lastDist = (points[1] + up - root.Position).Magnitude
+    local lastCheck = tick()
+    local stuckChecks = 0
+
+    local tweening = true
+    if Settings.GeppoPass then
+        task.spawn(function()
+            while tweening and Enabled do
+                fireGeppoOnce()
+                task.wait(0.1)
+            end
+        end)
+    end
+
+    while Enabled and (tick() - startTime) < timeout do
+        if not root.Parent then reason = "dead" break end
+        if state and state.blocked then reason = "blocked" break end
+        if isDone and isDone() then
+            reached, reason = true, "done"
+            break
+        end
+
+        local pos = root.Position
+        local isFinal = (idx == n)
+        local goal = points[idx] + up
+        local delta = goal - pos
+        local flat = Vector3.new(delta.X, 0, delta.Z)
+        local dist = delta.Magnitude
+
+        if isFinal then
+            if dist <= Nav.TweenStop or (flat.Magnitude <= Nav.TweenStop and math.abs(delta.Y) <= 4) then
+                reached, reason = true, "final"
+                break
+            end
+        elseif flat.Magnitude <= Nav.TweenReachMid then
+            -- waypoint tengah kena: ganti target tanpa berhenti
+            idx = idx + 1
+            local g = points[idx] + up
+            lastDist = (g - root.Position).Magnitude
+            lastCheck = tick()
+            stuckChecks = 0
+            showDirectionIndicator(g)
+            continue
+        end
+
+        local dt = RunService.Heartbeat:Wait()
+        local maxSpeed = math.max(Settings.TweenSpeed, 1)
+
+        if Nav.GroundFollow then
+            local flatDist = flat.Magnitude
+            local hSpeed = maxSpeed
+            if isFinal then
+                hSpeed = math.min(maxSpeed, flatDist / math.max(dt, 1 / 60))
+            end
+            local hVel = Vector3.zero
+            if flatDist > 0.05 then hVel = flat.Unit * hSpeed end
+
+            local curPos = root.Position
+            local gY = Nav.groundY(curPos, 80, groundParams)
+            local desiredY = gY and (gY + standH) or goal.Y
+            -- Waypoint lebih tinggi dari lantai di bawah (tangga/ledge): naik ke tingginya
+            if (goal.Y - standH) > (gY or -math.huge) + 1 and flatDist < 8 then
+                desiredY = goal.Y
+            end
+            local vy = math.clamp((desiredY - curPos.Y) * Nav.GroundGain, -maxSpeed, maxSpeed)
+            vel.Velocity = Vector3.new(hVel.X, vy, hVel.Z)
+        else
+            -- GroundFollow dimatiin: lurus 3D ke titik aktif
+            if dist > 0.05 then
+                local speed = maxSpeed
+                if isFinal then
+                    speed = math.min(maxSpeed, dist / math.max(dt, 1 / 60))
+                end
+                vel.Velocity = delta.Unit * speed
+            else
+                vel.Velocity = Vector3.zero
+            end
+        end
+
+        if flat.Magnitude > 0.5 then
+            gyro.CFrame = CFrame.lookAt(pos, pos + flat)
+        end
+        IndicatorBeam.targetPart.Position = goal
+
+        -- Watchdog progress ke titik aktif (dijeda selama stun)
+        if isStunned() then
+            lastCheck, lastDist, stuckChecks = tick(), dist, 0
+        elseif tick() - lastCheck >= Nav.ProgressInterval then
+            local progress = lastDist - dist
+            if progress < Nav.MinProgress and flat.Magnitude > Nav.NearFlat then
+                stuckChecks = stuckChecks + 1
+                if stuckChecks >= Nav.MaxStuckChecks then
+                    reason = "stuck"
+                    break
+                end
+            else
+                stuckChecks = 0
+            end
+            lastDist, lastCheck = dist, tick()
+        end
+    end
+
+    tweening = false
+    pcall(function() vel:Destroy() end)
+    pcall(function() gyro:Destroy() end)
+    pcall(function()
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end)
+    pcall(function()
+        hum.PlatformStand = false
+        hum.AutoRotate = true
+    end)
+    hideDirectionIndicator()
+
+    return reached, reason
+end
+
+-- Return: "Arrived" | "Finished" | "Blocked" | "Stuck" | "Stopped"
+function Nav.followTween(waypoints, isDone, state)
+    local points = {}
+    for _, w in ipairs(waypoints) do
+        table.insert(points, w.Position)
+    end
+    local timeout = Nav.pathLength(waypoints) / math.max(Settings.TweenSpeed, 1) * 2.5 + 10
+
+    local reached, reason = Nav.tweenAlong(points, timeout, isDone, state)
+
+    if isDone() then return "Arrived" end
+    if reached then return "Finished" end
+    if not Enabled then return "Stopped" end
+    if reason == "blocked" then return "Blocked" end
+    return "Stuck"
+end
+
+function Nav.follow(waypoints, isDone, state)
+    if Settings.TweenMode then
+        return Nav.followTween(waypoints, isDone, state)
+    end
+    return Nav.followWalk(waypoints, isDone, state)
+end
+
+-- ---------- keluar dari bawah atap ----------
+-- Sampling cincin (radius 10..160, tiap 22.5 derajat). Tiap titik di-raycast dari
+-- 300 stud di atas ke bawah: yang kena permukaan datar & di atas air = kandidat titik
+-- terbuka. Kandidat terdekat yang path-nya ada dipakai sebagai jalan keluar.
+-- Return: titik keluar, waypoints, path   (nil kalau gak ada)
+function Nav.findExit()
+    local origin = RootPart.Position
+    local params = Nav.rayParams(Nav.worldIgnore())
+    local tried = 0
+
+    for radius = 10, 160, 10 do
+        for k = 0, 15 do
+            local a = k * math.pi / 8
+            local sample = origin + Vector3.new(math.cos(a) * radius, 0, math.sin(a) * radius)
+            local hit = workspace:Raycast(sample + Vector3.new(0, 300, 0), Vector3.new(0, -500, 0), params)
+
+            if hit and hit.Position.Y > Nav.MinGroundY and hit.Normal.Y > 0.6 then
+                tried = tried + 1
+                local wps, path = Nav.computePath(origin, hit.Position + Vector3.new(0, 3, 0), 1)
+                if wps then return hit.Position, wps, path end
+                if tried >= Nav.MaxExitPaths then return nil end
+            end
+        end
+    end
+    return nil
+end
+
+function Nav.escapeRoof()
+    StatusExtra = "keluar dari atap"
+    updateGuiState()
+
+    local exitPos, wps, path = Nav.findExit()
+    if not exitPos then
+        print("[AutoEventDoor] Gak nemu jalan keluar dari bawah atap.")
+        StatusExtra = ""
+        updateGuiState()
+        return false
+    end
+
+    local function done()
+        local d = RootPart.Position - exitPos
+        return Vector3.new(d.X, 0, d.Z).Magnitude <= Nav.PointArrive
+    end
+
+    local state = { blocked = false }
+    local conn = path and path.Blocked:Connect(function() state.blocked = true end)
+    local status = Nav.follow(Nav.filter(wps), done, state)
+    if conn then conn:Disconnect() end
+
+    StatusExtra = ""
+    updateGuiState()
+    return status == "Arrived" or status == "Finished"
+end
+
+-- ---------- orkestrator ----------
+-- Return: "Arrived" | "Blocked" | "Stuck" | "Stopped"
+function Nav.goTo(goalPos, isDone, preWps, prePath)
+    for attempt = 1, Nav.MaxAttempts do
+        if not Enabled then return "Stopped" end
+        if isDone() then return "Arrived" end
+
+        local waypoints, path
+        if attempt == 1 and preWps then
+            waypoints, path = preWps, prePath
+        else
+            waypoints, path = Nav.computePath(RootPart.Position, goalPos)
+        end
+
+        if not waypoints then
+            -- Gak ada path: kalau lagi ketutup atap, keluar dulu lalu coba lagi
+            if Nav.isCovered(RootPart.Position) and Nav.escapeRoof() then
+                continue
+            end
+            return "Blocked"
+        end
+
+        local state = { blocked = false }
+        local conn = path and path.Blocked:Connect(function() state.blocked = true end)
+        local status = Nav.follow(Nav.filter(waypoints), isDone, state)
+        if conn then conn:Disconnect() end
+
+        if status == "Arrived" or status == "Stopped" then return status end
+
+        if status == "Finished" then
+            local d = RootPart.Position - goalPos
+            if Vector3.new(d.X, 0, d.Z).Magnitude <= Nav.PointArrive + 2 then
+                return "Arrived"
+            end
+        end
+        -- "Stuck" / "Blocked" / "Finished" tapi belum dekat: loop = hitung ulang dari posisi sekarang
+    end
+
+    return isDone() and "Arrived" or "Stuck"
+end
+
+-- ============ API publik (nama sama kayak sebelumnya) ============
+
+-- Tween lurus ke satu titik (dipakai fallback Witch). targetPos = titik LANTAI.
+local function tweenToPoint(targetPos, timeout)
+    local reached = Nav.tweenAlong({targetPos}, timeout or 8)
+    return reached
+end
+
+-- target: eventDoor (Model/Part) atau Part tujuan biasa (ShopTarget / MerchantTarget).
+-- Return: true kalau sampai
+local function walkToDoorHeld(target)
+    local center = getDoorPosition(target)
+    if not center then return false end
+
+    local isDoor = (target.Name == EVENT_DOOR_CHILD_NAME)
+    local lost = false
+
+    local function isDone()
+        if not target.Parent then lost = true return true end
+        local c = getDoorPosition(target)
+        if not c then lost = true return true end
+
+        if isDoor then
+            -- cukup dekat (3D) & kelihatan, atau udah nempel banget secara datar
+            local d = (RootPart.Position - c).Magnitude
+            if d <= MINE_DISTANCE and Nav.canSee(target, c) then return true end
+            local dd = RootPart.Position - c
+            return Vector3.new(dd.X, 0, dd.Z).Magnitude <= Nav.PointArrive
+        end
+
+        local dd = RootPart.Position - c
+        return Vector3.new(dd.X, 0, dd.Z).Magnitude <= Nav.PointArrive and math.abs(dd.Y) <= 10
+    end
+
+    if isDone() then return not lost end
+
+    -- Pilih titik tujuan
+    local goal, wps, path
+    if isDoor then
+        goal, wps, path = Nav.pickGoal(Nav.doorGoals(target))
+    end
+    if not goal then
+        goal = center
+    end
+
+    local status = Nav.goTo(goal, isDone, wps, path)
+    if lost then
+        releaseAllMoveKeys()
+        return false
+    end
+
+    releaseAllMoveKeys()
+    return status == "Arrived"
+end
+
+-- ============ Trip ke Witch of Halloween buat beli chest ============
+local SHOP_ITEM = "Rare Fruit Chest"
+local SHOP_WAIT = 2          -- tunggu sebelum beli setelah sampai di NPC
+local MAX_BUYS_PER_TRIP = 20 -- pengaman biar gak infinite loop
+
+local function getWitchHat()
+    local npcs = workspace:FindFirstChild("NPCs")
+    local witch = npcs and npcs:FindFirstChild("Witch of Halloween")
+    return witch and witch:FindFirstChild("Witch's HatHat")
+end
+
+-- ============ Sampai ke Witch (target di LANTAI, bukan topi) ============
+-- Sebelumnya tujuannya topi ("Witch's HatHat") yang posisinya melayang di atas
+-- kepala NPC / bisa jauh dari lantai, jadi sering "gak beneran sampai". Sekarang:
+--   1) cari badan NPC, ambil titik ~4 stud di depannya (arah karakter), turun ke LANTAI
+--   2) jalan lewat pathfinding
+--   3) kalau belum pas (jarak datar > SHOP_ARRIVE_FLAT), tween lurus, max 3x
+--   4) kalau tetap belum pas, batalin pembelian (return false -> backoff, script tetap jalan)
+local SHOP_ARRIVE_FLAT = 6
+local ShopRetryAt = 0 -- kalau trip gagal, jangan dicoba lagi sebelum waktu ini (tick)
+
+local ShopTarget = Instance.new("Part")
+ShopTarget.Name = "AutoEventDoorShopTarget"
+ShopTarget.Size = Vector3.new(1, 1, 1)
+ShopTarget.Transparency = 1
+ShopTarget.CanCollide = false
+ShopTarget.CanQuery = false
+ShopTarget.Anchored = true
+ShopTarget.Parent = workspace
+
+-- Return: posisi lantai dekat Witch, atau nil kalau NPC gak ketemu
+local function getWitchStandPosition()
+    local npcs = workspace:FindFirstChild("NPCs")
+    local witch = npcs and npcs:FindFirstChild("Witch of Halloween")
+    if not witch then return nil end
+
+    local ref = witch:FindFirstChild("HumanoidRootPart")
+        or witch.PrimaryPart
+        or witch:FindFirstChildWhichIsA("BasePart", true)
+    if not ref then return nil end
+
+    -- Geser ~4 stud dari NPC ke arah karakter, biar gak nabrak badan NPC
+    local offset = Vector3.zero
+    local toPlayer = RootPart.Position - ref.Position
+    local flat = Vector3.new(toPlayer.X, 0, toPlayer.Z)
+    if flat.Magnitude > 1 then
+        offset = flat.Unit * 4
+    end
+
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {Character, witch, ShopTarget, IndicatorBeam.targetPart}
+
+    local origin = ref.Position + offset + Vector3.new(0, 5, 0)
+    local result = workspace:Raycast(origin, Vector3.new(0, -80, 0), params)
+
+    if result then
+        return result.Position
+    end
+    return ref.Position + offset - Vector3.new(0, 3, 0)
+end
+
+-- Return: true kalau akhirnya cukup dekat (jarak datar <= SHOP_ARRIVE_FLAT)
+local function arriveAtWitch()
+    local ground = getWitchStandPosition()
+    if not ground then return false end
+    ShopTarget.Position = ground
+
+    local function closeEnough()
+        local d = RootPart.Position - ground
+        return Vector3.new(d.X, 0, d.Z).Magnitude <= SHOP_ARRIVE_FLAT and math.abs(d.Y) <= 10
+    end
+
+    if closeEnough() then return true end
+
+    -- 1) Pathfinding biasa
+    walkToDoorHeld(ShopTarget)
+    if not Enabled then return false end
+    if closeEnough() then return true end
+
+    -- 2) Fallback: tween lurus (nempel lantai), hitung ulang posisi NPC tiap percobaan
+    for attempt = 1, 3 do
+        if not Enabled then return false end
+
+        ground = getWitchStandPosition() or ground
+        ShopTarget.Position = ground
+
+        print("[AutoEventDoor] Belum pas sampai di Witch, tween langsung (percobaan " .. attempt .. "/3).")
+        tweenToPoint(ground, 30)
+        if closeEnough() then return true end
+    end
+
+    return closeEnough()
+end
+
+-- Return: true kalau minimal 1 pembelian terverifikasi (candy berkurang).
+-- Sampai di NPC, beli berulang selama candy masih >= CandyTarget, jadi gak
+-- perlu bolak-balik jalan tiap beli.
+local function doShopTrip()
+    if not getWitchStandPosition() then
+        print("[AutoEventDoor] Witch of Halloween gak ketemu di workspace.NPCs.")
+        return false
+    end
+
+    print("[AutoEventDoor] Candy cukup, jalan ke Witch of Halloween...")
+    local arrived = arriveAtWitch()
+    if not Enabled then
+        return false
+    end
+    if not arrived then
+        -- Belum beneran sampai: JANGAN coba beli. Return false -> mainLoop kasih
+        -- jeda (backoff) lalu lanjut farm door, script tetap jalan.
+        print("[AutoEventDoor] Belum pas sampai di Witch, pembelian dibatalkan.")
+        return false
+    end
+
+    task.wait(SHOP_WAIT)
+    if not Enabled then return false end
+
+    local bought = 0
+    while Enabled and bought < MAX_BUYS_PER_TRIP do
+        local before = getCandyCount()
+        if before and before < Settings.CandyTarget then
+            break -- candy udah gak cukup buat beli lagi
+        end
+
+        local ok, err = pcall(function()
+            local remote = ReplicatedStorage:WaitForChild("HalloweenShopRemote", 5)
+            remote:InvokeServer(SHOP_ITEM)
+        end)
+
+        if not ok then
+            print("[AutoEventDoor] Gagal beli " .. SHOP_ITEM .. ": " .. tostring(err))
+            break
+        end
+
+        task.wait(1)
+        local after = getCandyCount()
+
+        -- Sukses = candy BERKURANG. Kalau gak berkurang, anggap pembelian gagal.
+        if before and after and after >= before then
+            print("[AutoEventDoor] Candy gak berkurang, pembelian dianggap gagal.")
+            break
+        end
+
+        bought = bought + 1
+        if not (before and after) then
+            break -- candy gak kebaca, gak bisa diverifikasi, cukup 1x
+        end
+    end
+
+    if bought > 0 then
+        print("[AutoEventDoor] Beli " .. SHOP_ITEM .. " x" .. bought .. ", balik ngumpulin candy.")
+    end
+    return bought > 0
+end
+
+-- ============ Auto Merchant (Traveling Merchant) ============
+-- Dari source: merchant dianggap "lagi muncul" kalau ada value
+-- ReplicatedStorage.CompassGuider["Traveling Merchant"] (Vector3 / CFrame = posisi
+-- merchant). Kalau value itu gak ada, merchant lagi gak keluar. Stok merchant
+-- restock tiap 30 menit; 1 stok cukup dibeli sekali, jadi setelah beli kita
+-- tandai MerchantBought dan baru reset pas marker-nya hilang (stok berikutnya).
+
+-- Beli item: Events.TravelingMerchentRemote:InvokeServer(itemName, <angka>, <GUID>)
+-- (ejaan "Merchent" memang begitu di game). Angka & GUID dari contoh remote-mu;
+-- nilainya sama di dua item berbeda, jadi bukan per-item, kemungkinan per-stok
+-- merchant (berubah tiap restock). Kalau pembelian mulai ditolak setelah merchant
+-- restock, ambil nilai baru dari remote spy dan ganti di dalam fungsi di bawah.
+-- (Konstantanya sengaja di DALAM fungsi, biar gak nambah variabel local di level
+-- atas script - batas Luau 200 local per scope.)
+local MERCHANT_BUY_CONFIGURED = true
+local function buyMerchantItem(itemName)
+    local STOCK_ID = 1613697448
+    local STOCK_GUID = "6a75e173-f8a5-4d9e-b989-25536ecbd53c"
+
+    local events = ReplicatedStorage:WaitForChild("Events", 5)
+    local remote = events and events:WaitForChild("TravelingMerchentRemote", 5)
+    if not remote then
+        error("Events.TravelingMerchentRemote gak ketemu")
+    end
+
+    -- Return: balasan server (dicetak di console buat diagnosa)
+    return remote:InvokeServer(itemName, STOCK_ID, STOCK_GUID)
+end
+
+local MerchantBought = false   -- stok yang lagi keluar sudah dibeli
+local MerchantRetryAt = 0
+local MerchantFails = 0
+local MerchantWarned = false
+
+local MerchantTarget = Instance.new("Part")
+MerchantTarget.Name = "AutoEventDoorMerchantTarget"
+MerchantTarget.Size = Vector3.new(1, 1, 1)
+MerchantTarget.Transparency = 1
+MerchantTarget.CanCollide = false
+MerchantTarget.Anchored = true
+MerchantTarget.Parent = workspace
+
+local function getMerchantMarker()
+    local compassGuider = ReplicatedStorage:FindFirstChild("CompassGuider")
+    return compassGuider and compassGuider:FindFirstChild("Traveling Merchant")
+end
+
+local function getMerchantPosition(marker)
+    local value = marker and marker.Value
+    if typeof(value) == "CFrame" then return value.Position end
+    if typeof(value) == "Vector3" then return value end
+    return nil
+end
+
+-- Peli dibaca dari HUD.Main.Peli.TextLabel (sama kayak di source)
+local function getPeli()
+    local gui = LocalPlayer:FindFirstChild("PlayerGui")
+    local hud = gui and gui:FindFirstChild("HUD")
+    local main = hud and hud:FindFirstChild("Main")
+    local peli = main and main:FindFirstChild("Peli")
+    local label = peli and peli:FindFirstChild("TextLabel")
+    if not label then return 0 end
+    local digits = label.Text:gsub("[^%d]", "")
+    return tonumber(digits) or 0
+end
+
+local function getMerchantItemList()
+    local list = {}
+    for name in string.gmatch(Settings.MerchantItems or "", "[^,]+") do
+        name = name:match("^%s*(.-)%s*$")
+        if name ~= "" then table.insert(list, name) end
+    end
+    return list
+end
+
+-- Return: true kalau minimal 1 item berhasil dibeli
+local function doMerchantTrip(marker)
+    local pos = getMerchantPosition(marker)
+    if not pos then
+        print("[AutoEventDoor] Posisi Traveling Merchant gak kebaca dari marker.")
+        return false
+    end
+
+    local items = getMerchantItemList()
+    print("[AutoEventDoor] Traveling Merchant muncul, jalan ke sana...")
+
+    MerchantTarget.Position = pos
+    local arrived = walkToDoorHeld(MerchantTarget)
+    if not arrived or not Enabled then
+        return false
+    end
+
+    task.wait(1)
+
+    local bought = 0
+    for _, itemName in ipairs(items) do
+        if not Enabled then break end
+
+        local ok, res = pcall(buyMerchantItem, itemName)
+        if ok and res ~= false then
+            bought = bought + 1
+            print("[AutoEventDoor] Beli dari merchant: " .. itemName .. " (balasan server: " .. tostring(res) .. ")")
+        else
+            local err = ok and ("ditolak server: " .. tostring(res)) or res
+            print("[AutoEventDoor] Gagal beli " .. itemName .. ": " .. tostring(err))
+        end
+        task.wait(0.5)
+    end
+
+    return bought > 0
+end
+
+-- ============ Equip Candy Corn Basket ============
+-- Basket harus ter-equip dulu sebelum nyari event door (dan CandyIndicator juga
+-- baru muncul di PlayerGui pas tool-nya di-equip). Tool yang lagi di-equip
+-- pindah dari Backpack ke Character, jadi dicek dua-duanya.
+local BASKET_NAME = "Candy Corn Basket"
+
+-- Cari tool basket di sebuah container: nama persis dulu, kalau gak ada baru
+-- cari Tool yang namanya mengandung "candy corn" (jaga-jaga namanya beda dikit)
+local function findBasketIn(container)
+    if not container then return nil end
+
+    local exact = container:FindFirstChild(BASKET_NAME)
+    if exact and exact:IsA("Tool") then
+        return exact
+    end
+
+    for _, child in ipairs(container:GetChildren()) do
+        if child:IsA("Tool") and string.find(string.lower(child.Name), "candy corn", 1, true) then
+            return child
+        end
+    end
+
+    return nil
+end
+
+-- Daftar nama Tool di Backpack & Character, buat debug kalau basket gak ketemu
+local function listToolNames()
+    local names = {}
+    local function collect(container, label)
+        if not container then return end
+        for _, child in ipairs(container:GetChildren()) do
+            if child:IsA("Tool") then
+                table.insert(names, label .. ": " .. child.Name)
+            end
+        end
+    end
+    collect(LocalPlayer:FindFirstChild("Backpack"), "Backpack")
+    collect(LocalPlayer.Character, "Character")
+    return #names > 0 and table.concat(names, ", ") or "(gak ada Tool sama sekali)"
+end
+
+-- Return: tool, isEquipped
+-- NOTE: Di Roblox, tool yang di-equip PINDAH dari Backpack ke Character, jadi
+-- ilang dari Backpack itu NORMAL. Makanya Character dicek duluan.
+local function getBasketTool()
+    local equippedTool = findBasketIn(LocalPlayer.Character)
+    if equippedTool then
+        return equippedTool, true
+    end
+
+    local backpackTool = findBasketIn(LocalPlayer:FindFirstChild("Backpack"))
+    if backpackTool then
+        return backpackTool, false
+    end
+
+    return nil, false
+end
+
+-- Return: true kalau basket sudah ter-equip (atau berhasil di-equip)
+local function ensureBasketEquipped()
+    local tool, equipped = getBasketTool()
+    if equipped then return true end
+    if not tool then return false end -- basket gak ada di Backpack
+
+    local hum = Humanoid
+    if not hum or not hum.Parent then return false end
+
+    pcall(function()
+        hum:EquipTool(tool)
+    end)
+
+    -- Tunggu sampai beneran pindah ke Character (maks 3 detik)
+    local waitStart = tick()
+    while Enabled and (tick() - waitStart) < 3 do
+        local _, nowEquipped = getBasketTool()
+        if nowEquipped then
+            task.wait(0.3) -- kasih waktu CandyIndicator muncul di PlayerGui
+            return true
+        end
+        task.wait(0.1)
+    end
+
+    return false
+end
+
+-- ============ Buka Rare Fruit Chest ============
+-- Kalau Rare Fruit Chest >= Settings.ChestOpenAt (default 7), ulang terus:
+--   1) equip tool "Rare Fruit Chest" dari Backpack
+--   2) klik layar (tengah screen)
+--   3) tunggu PlayerGui.ConfirmationPrompt muncul, lalu klik
+--      ConfirmationPrompt.Main.OptionsFrame.Accept (ImageButton)
+--   4) tunggu 9 detik, cek jumlah chest
+-- sampai chest tinggal CHEST_KEEP (2), lalu balik farm door. (Basket otomatis
+-- di-equip lagi di iterasi mainLoop berikutnya.)
+local CHEST_KEEP = 2                -- chest yang disisakan (berhenti buka kalau jumlah <= ini)
+local OPEN_WAIT_AFTER_ACCEPT = 9
+local PROMPT_WAIT = 4               -- tunggu prompt muncul setelah klik layar
+local OPEN_MAX_CYCLES = 60          -- pengaman biar gak infinite loop
+local OPEN_MAX_NOPROGRESS = 3       -- chest gak berkurang sekian siklus = nyerah
+local OPEN_MAX_PROMPT_FAILS = 3     -- prompt gak muncul sekian kali berturut-turut = nyerah
+local ChestRetryAt = 0
+
+-- ---- Equip chest ----
+local function findChestToolIn(container)
+    if not container then return nil end
+
+    local exact = container:FindFirstChild(CHEST_NAME)
+    if exact and exact:IsA("Tool") then return exact end
+
+    local lowerName = string.lower(CHEST_NAME)
+    for _, child in ipairs(container:GetChildren()) do
+        if child:IsA("Tool") and string.sub(string.lower(child.Name), 1, #lowerName) == lowerName then
+            return child
+        end
+    end
+    return nil
+end
+
+-- Return: tool, isEquipped (tool yang di-equip pindah ke Character, jadi dicek duluan)
+local function getChestTool()
+    local equippedTool = findChestToolIn(LocalPlayer.Character)
+    if equippedTool then return equippedTool, true end
+
+    local backpackTool = findChestToolIn(LocalPlayer:FindFirstChild("Backpack"))
+    if backpackTool then return backpackTool, false end
+
+    return nil, false
+end
+
+-- Return: tool kalau chest sudah ter-equip (atau berhasil di-equip), nil kalau gagal
+local function ensureChestEquipped()
+    local tool, equipped = getChestTool()
+    if equipped then return tool end
+    if not tool then return nil end
+
+    local hum = Humanoid
+    if not hum or not hum.Parent then return nil end
+
+    pcall(function()
+        hum:EquipTool(tool)
+    end)
+
+    local waitStart = tick()
+    while Enabled and (tick() - waitStart) < 3 do
+        local nowTool, nowEquipped = getChestTool()
+        if nowEquipped then
+            task.wait(0.3)
+            return nowTool
+        end
+        task.wait(0.1)
+    end
+    return nil
+end
+
+-- ---- Klik ----
+-- Klik kiri di tengah layar (pakai ukuran viewport kamera)
+local function clickScreenCenter()
+    local camera = workspace.CurrentCamera
+    local size = camera and camera.ViewportSize or Vector2.new(800, 600)
+    local x, y = size.X / 2, size.Y / 2
+
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+    task.wait(0.05)
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+end
+
+-- Klik beneran di tengah sebuah GuiObject (koordinat + inset topbar kalau perlu)
+local function clickGuiObject(obj)
+    local pos, size = obj.AbsolutePosition, obj.AbsoluteSize
+    local screenGui = obj:FindFirstAncestorWhichIsA("ScreenGui")
+    local insetY = 0
+    if screenGui and not screenGui.IgnoreGuiInset then
+        insetY = game:GetService("GuiService"):GetGuiInset().Y
+    end
+
+    local x = pos.X + size.X / 2
+    local y = pos.Y + size.Y / 2 + insetY
+
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+    task.wait(0.05)
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+end
+
+-- Fire koneksi event tombol (cara paling andal buat ImageButton). Berhenti di
+-- signal pertama yang punya koneksi biar gak ke-trigger dobel.
+local BUTTON_SIGNALS = {"MouseButton1Click", "Activated"}
+
+local function fireButtonSignals(btn)
+    for _, name in ipairs(BUTTON_SIGNALS) do
+        local signal = btn[name]
+        local fired = false
+
+        if typeof(getconnections) == "function" then
+            local ok, conns = pcall(getconnections, signal)
+            if ok and type(conns) == "table" then
+                for _, conn in ipairs(conns) do
+                    if pcall(function() conn:Fire() end) then
+                        fired = true
+                    end
+                end
+            end
+        elseif typeof(firesignal) == "function" then
+            if pcall(firesignal, signal) then
+                fired = true
+            end
+        end
+
+        if fired then return true end
+    end
+    return false
+end
+
+-- ---- ConfirmationPrompt ----
+-- Return: tombol Accept kalau prompt lagi muncul, nil kalau belum/sudah hilang
+local function getAcceptButton()
+    local gui = LocalPlayer:FindFirstChild("PlayerGui")
+    local prompt = gui and gui:FindFirstChild("ConfirmationPrompt")
+    local main = prompt and prompt:FindFirstChild("Main")
+    local options = main and main:FindFirstChild("OptionsFrame")
+    local accept = options and options:FindFirstChild("Accept")
+    if not accept then return nil end
+
+    if prompt:IsA("ScreenGui") and not prompt.Enabled then return nil end
+    if main:IsA("GuiObject") and not main.Visible then return nil end
+    if accept:IsA("GuiObject") and (not accept.Visible or accept.AbsoluteSize.X <= 0) then return nil end
+
+    return accept
+end
+
+local function waitForAccept(timeout)
+    local start = tick()
+    while Enabled and (tick() - start) < timeout do
+        local accept = getAcceptButton()
+        if accept then
+            task.wait(0.2) -- kasih waktu animasi muncul selesai
+            return getAcceptButton() or accept
+        end
+        task.wait(0.1)
+    end
+    return nil
+end
+
+local function acceptPrompt(accept)
+    fireButtonSignals(accept)
+    task.wait(0.5)
+
+    -- Kalau prompt masih nongol, klik beneran di tombolnya
+    local still = getAcceptButton()
+    if still then
+        clickGuiObject(still)
+        task.wait(0.5)
+    end
+end
+
+-- Nunggu sambil tetap respon ke toggle OFF
+local function waitWhileEnabled(seconds, label)
+    local start = tick()
+    while Enabled and (tick() - start) < seconds do
+        StatusExtra = string.format("%s %.0fs", label, seconds - (tick() - start))
+        updateGuiState()
+        task.wait(0.25)
+    end
+end
+
+-- Return: true kalau chest berhasil turun sampai <= CHEST_KEEP
+local function doChestOpen()
+    local last = getChestCount()
+    local noProgress = 0
+    local promptFails = 0
+    print("[AutoEventDoor] Chest " .. last .. " >= " .. Settings.ChestOpenAt .. ", mulai buka sampai sisa " .. CHEST_KEEP .. "...")
+
+    for cycle = 1, OPEN_MAX_CYCLES do
+        if not Enabled then return false end
+
+        waitUntilNotStunned()
+        if not Enabled then return false end
+
+        -- Sudah tinggal sisa? Jangan buka lagi
+        if getChestCount() <= CHEST_KEEP then
+            print("[AutoEventDoor] Chest tinggal " .. getChestCount() .. ", berhenti buka.")
+            StatusExtra = ""
+            updateGuiState()
+            return true
+        end
+
+        local tool = ensureChestEquipped()
+        if not tool then
+            print("[AutoEventDoor] '" .. CHEST_NAME .. "' gak ketemu / gagal di-equip dari Backpack.")
+            return false
+        end
+
+        StatusExtra = "buka chest (sisa " .. last .. ")"
+        updateGuiState()
+
+        clickScreenCenter()
+        local accept = waitForAccept(PROMPT_WAIT)
+
+        if not accept then
+            -- Cadangan: aktifin tool langsung kalau klik layar gak memicu prompt
+            pcall(function() tool:Activate() end)
+            accept = waitForAccept(3)
+        end
+
+        if not accept then
+            promptFails = promptFails + 1
+            print("[AutoEventDoor] ConfirmationPrompt gak muncul (" .. promptFails .. "/" .. OPEN_MAX_PROMPT_FAILS .. ").")
+            if promptFails >= OPEN_MAX_PROMPT_FAILS then
+                return false
+            end
+            task.wait(1)
+            continue
+        end
+
+        promptFails = 0
+        acceptPrompt(accept)
+
+        waitWhileEnabled(OPEN_WAIT_AFTER_ACCEPT, "buka chest")
+        if not Enabled then return false end
+
+        local now = getChestCount()
+        print("[AutoEventDoor] Buka chest siklus " .. cycle .. ": " .. last .. " -> " .. now)
+
+        if now <= CHEST_KEEP then
+            StatusExtra = ""
+            updateGuiState()
+            return true
+        end
+
+        if now >= last then
+            noProgress = noProgress + 1
+            if noProgress >= OPEN_MAX_NOPROGRESS then
+                print("[AutoEventDoor] Chest gak berkurang " .. OPEN_MAX_NOPROGRESS .. " siklus berturut-turut, berhenti.")
+                return false
+            end
+        else
+            noProgress = 0
+        end
+        last = now
+    end
+
+    return false
+end
+
+-- Guard biar gak ada 2 mainLoop jalan bareng kalau toggle OFF lalu cepat ON lagi
+local MainLoopRunning = false
+
+local function mainLoop()
+    if MainLoopRunning then return end
+    MainLoopRunning = true
+
+    local shopFailures = 0
+    local basketWarned = false
+
+    while Enabled do
+        -- Jangan ngapa-ngapain selagi stun (diculik / animasi ambil candy)
+        waitUntilNotStunned()
+        if not Enabled then break end
+
+        -- Basket harus ter-equip dulu sebelum ngapa-ngapain (cari door / cek candy).
+        -- Dicek tiap iterasi, jadi kalau ke-unequip / respawn, otomatis di-equip lagi.
+        if not ensureBasketEquipped() then
+            if not basketWarned and Enabled then
+                print("[AutoEventDoor] '" .. BASKET_NAME .. "' gak ketemu di Backpack/Character, nunggu... Tool yang kebaca: " .. listToolNames())
+                basketWarned = true
+            end
+            task.wait(1)
+            continue
+        end
+        basketWarned = false
+
+        local tripped = false
+
+        -- Traveling Merchant: marker hilang = stok berikutnya boleh dibeli lagi
+        local merchantMarker = getMerchantMarker()
+        if not merchantMarker then
+            MerchantBought = false
+            MerchantFails = 0
+        end
+
+        if Settings.AutoMerchant and merchantMarker and not MerchantBought
+            and tick() >= MerchantRetryAt and getPeli() > 0 then
+            local items = getMerchantItemList()
+            if #items == 0 then
+                if not MerchantWarned then
+                    print("[AutoEventDoor] Auto Merchant ON tapi daftar item kosong.")
+                    MerchantWarned = true
+                end
+            elseif not MERCHANT_BUY_CONFIGURED then
+                if not MerchantWarned then
+                    print("[AutoEventDoor] Auto Merchant: buyMerchantItem() belum diisi, trip dilewati.")
+                    MerchantWarned = true
+                end
+            else
+                tripped = true
+                if doMerchantTrip(merchantMarker) then
+                    MerchantBought = true
+                    MerchantFails = 0
+                else
+                    MerchantFails = MerchantFails + 1
+                    MerchantRetryAt = tick() + math.min(30 * MerchantFails, 120)
+                    print("[AutoEventDoor] Trip merchant gagal, coba lagi " .. math.ceil(MerchantRetryAt - tick()) .. " detik lagi.")
+                end
+            end
+        end
+
+        -- Rare Fruit Chest numpuk (>= trigger): buka sampai tinggal CHEST_KEEP, lalu balik farm door/candy.
+        -- math.max: kalau "Buka Chest di" diisi <= CHEST_KEEP, trigger tetap minimal CHEST_KEEP + 1
+        -- (kalau tidak, doChestOpen langsung selesai tanpa buka apa-apa tapi farm door ke-skip terus).
+        if not tripped and Settings.ChestOpenAt > 0 and tick() >= ChestRetryAt then
+            if getChestCount() >= math.max(Settings.ChestOpenAt, CHEST_KEEP + 1) then
+                tripped = true
+
+                if not doChestOpen() and Enabled then
+                    -- gagal / gak ada progress: jangan diulang terus, coba lagi 60 detik lagi
+                    ChestRetryAt = tick() + 60
+                    print("[AutoEventDoor] Buka chest gagal, coba lagi 60 detik lagi. Lanjut farm candy dulu.")
+                end
+
+                StatusExtra = ""
+                updateGuiState()
+            end
+        end
+
+        -- Candy udah cukup: pergi beli chest dulu, lalu balik ngumpulin candy
+        local candyCount = getCandyCount()
+        if not tripped and candyCount and candyCount >= Settings.CandyTarget
+            and tick() >= ShopRetryAt then
+            tripped = true
+
+            if doShopTrip() then
+                shopFailures = 0
+                ShopRetryAt = 0
+            elseif Enabled then
+                -- Gagal (NPC gak ketemu / remote error / candy gak berkurang):
+                -- JANGAN matiin script. Coba lagi nanti dengan jeda makin lama
+                -- (30s, 60s, ... max 180s), sementara lanjut farm door.
+                shopFailures = shopFailures + 1
+                local backoff = math.min(30 * shopFailures, 180)
+                ShopRetryAt = tick() + backoff
+                print("[AutoEventDoor] Trip Witch gagal (" .. shopFailures .. "x), coba lagi " ..
+                    backoff .. " detik lagi. Lanjut farm door dulu.")
+                task.wait(1)
+            end
+        end
+
+        if not tripped then
+            local door = findNextEventDoor()
+
+            if door then
+                local arrived = walkToDoorHeld(door)
+
+                if arrived and door.Parent and Enabled then
+                    -- Kalau door ini masih cooldown, tunggu di sini sampai siap.
+                    -- Sambil nunggu, kalau candy udah cukup buat beli chest, batalin
+                    -- nunggu supaya iterasi berikutnya langsung ke Witch.
+                    local interrupted = false
+                    while Enabled and door.Parent and tick() < getDoorReadyAt(door) do
+                        StatusExtra = "cooldown " .. formatTime(getDoorReadyAt(door) - tick())
+                        updateGuiState()
+
+                        local candyNow = getCandyCount()
+                        if candyNow and candyNow >= Settings.CandyTarget and tick() >= ShopRetryAt then
+                            interrupted = true
+                            break
+                        end
+
+                        task.wait(1)
+                    end
+                    StatusExtra = ""
+                    updateGuiState()
+
+                    if not interrupted and Enabled and door.Parent then
+                        LastVisit[door] = tick() -- cooldown mulai dihitung dari sekarang
+
+                        -- Sampai di door: tunggu sebentar, Geppo SEKALI, baru fire prompt
+                        if Settings.DoorGeppo then
+                            task.wait(Settings.DoorArriveWait)
+                            -- Lagi stun pun tetap Geppo (gak nunggu stun habis)
+                            if Enabled and door.Parent then
+                                fireGeppoOnce() -- InvokeServer, otomatis nunggu server
+                                task.wait(Settings.DoorGeppoDelay)
+                            end
+                        end
+
+                        triggerDoorPrompt(door, Settings.HoldDuration)
+
+                        -- Animasi ambil candy / diculik = stun. Kasih waktu stun
+                        -- ke-replicate, lalu tunggu sampai habis sebelum gerak lagi.
+                        task.wait(0.3)
+                        waitUntilNotStunned()
+
+                        -- Mundur sebentar sebelum cari pintu berikutnya - badan kemungkinan
+                        -- lagi nempel ke tembok/pintu ini.
+                        if Enabled then
+                            setKeyHeld(Enum.KeyCode.S, true)
+                            task.wait(0.4)
+                            setKeyHeld(Enum.KeyCode.S, false)
+                        end
+
+                        updateGuiState()
+                    end
+                elseif Enabled and door.Parent then
+                    -- Door gagal dicapai: tetap DIHITUNG (kena cooldown juga), jadi
+                    -- progress naik dan script lanjut ke door lain, bukan macet di sini
+                    print("[AutoEventDoor] Gagal nyampe ke salah satu door, di-skip & dihitung.")
+                    LastVisit[door] = tick()
+                    updateGuiState()
+                end
+            else
+                task.wait(0.5)
+            end
+        end
+
+        task.wait(0.2)
+    end
+
+    StatusExtra = ""
+    releaseAllMoveKeys()
+    disableMovementMode()
+    MainLoopRunning = false
+end
+
+local function setEnabled(state)
+    Enabled = state
+    updateGuiState()
+
+    if Enabled then
+        print("[AutoEventDoor] ON")
+        task.spawn(mainLoop)
+    else
+        print("[AutoEventDoor] OFF")
+        releaseAllMoveKeys()
+        disableMovementMode()
+    end
+end
+
+ToggleButton.MouseButton1Click:Connect(function()
+    setEnabled(not Enabled)
+end)
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == TOGGLE_KEY then
+        setEnabled(not Enabled)
+    end
+end)
+
+Humanoid.WalkSpeed = Settings.WalkSpeed
+updateGuiState()
+
+-- Refresh label Candy tiap 1 detik, independen dari ON/OFF status, biar keliatan real-time
+task.spawn(function()
+    while true do
+        CandyLabel.Text = getCandyText()
+        task.wait(1)
+    end
+end)
+
+Webhook.start()
+
+print("[AutoEventDoor] Script loaded. Tekan ',' atau klik tombol GUI untuk toggle ON/OFF.")
