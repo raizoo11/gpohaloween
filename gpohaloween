@@ -1,8 +1,8 @@
 --[[
     GPO - Auto Event Door (Spooksville) Script + GUI
     - Target: workspace.Islands.Spooksville.Building:GetChildren()[i].eventDoor
-    - Pathfinding jalan pakai HOLD W/A/S/D (shiftlock-style, kamera yang muter,
-      badan ngikut), bukan Humanoid:MoveTo instan
+    - Pathfinding: NAV v2 (lihat blok "NAV" di tengah script). Jalan lewat TWEEN
+      (BodyVelocity) atau HOLD W/A/S/D, bukan Humanoid:MoveTo instan
     - Setelah sampai di eventDoor, trigger ProximityPrompt di
       eventDoor.Frame.ProximityPrompt selama X detik (bisa diatur di GUI).
       Urutan di door: tunggu sebentar -> Geppo 1x -> fire prompt
@@ -10,8 +10,8 @@
       (pakai fireproximityprompt kalau ada, fallback ke InputHoldBegin/End, lalu tombol E)
     - Deteksi STUN (LocalPlayer.StunFolder.Stun): dipakai buat nunggu animasi ambil
       candy / diculik selesai di antara aksi. TWEEN sendiri GAK di-pause kena stun/hit
-      (tetap jalan terus), tapi NOCLIP otomatis dimatiin selama kena hit / stun /
-      ragdoll (biar badan gak tembus tanah) lalu balik diatur watchdog progress
+      (tetap jalan terus); watchdog progress cuma dijeda selama stun. TANPA noclip:
+      kalau macet, path dihitung ulang dari posisi sekarang
     - Ngunjungin SEMUA event door yang ada (dihitung otomatis)
     - Tiap door punya COOLDOWN (default 180 detik / 3 menit) sejak dikunjungi.
       Door yang masih cooldown di-skip. Kalau semua door lagi cooldown, script
@@ -333,8 +333,8 @@ local Enabled = false
 local LastKnownDoorCount = 0 -- total door yang ketemu terakhir kali di-scan, buat progress label
 
 -- Cooldown per door: LastVisit[door] = waktu (tick) pas door itu terakhir dikunjungi.
--- Door yang gagal dicapai juga dicatat di sini (dihitung & kena cooldown), jadi gak
--- dicoba terus-terusan tanpa henti.
+-- Door yang gagal dicapai juga dicatat di sini (dihitung & kena cooldown), jadi
+-- gak dicoba terus-terusan tanpa henti.
 local LastVisit = {}
 local COOLDOWN_BUFFER = 3 -- detik ekstra, jaga-jaga selisih waktu client vs server
 local StatusExtra = ""    -- teks tambahan di status (mis. hitung mundur cooldown)
@@ -1266,14 +1266,11 @@ local function triggerDoorPrompt(door, duration)
     return fired
 end
 
--- ============ HOLD WASD MOVEMENT (camera-relative, tanpa sentuh kamera) ============
--- W/A/S/D di Roblox itu arahnya RELATIF KE KAMERA, bukan ke badan. Jadi di sini
--- kita CUMA BACA arah kamera saat ini (gak pernah ditulis/diputer sama sekali -
--- makanya gak ada potensi konflik/muter-muter), terus tentuin kombinasi tombol
--- yang bikin karakter jalan ke arah target. Humanoid.AutoRotate dibiarin true
--- (default), jadi badan muter sendiri secara natural ngikut arah gerak, persis
--- kayak kalau pemain beneran mencet WASD.
+-- ====================================================================
+-- NAV v2 - PATHFINDING (WASD relatif kamera / tween BodyVelocity)
+-- ====================================================================
 
+-- ============ Input (WASD relatif kamera) ============
 local HeldKeys = {
     [Enum.KeyCode.W] = false,
     [Enum.KeyCode.A] = false,
@@ -1293,112 +1290,17 @@ local function releaseAllMoveKeys()
     end
 end
 
--- ============ Deteksi halangan di depan (whisker raycast) ============
--- Nembak 3 ray (tengah, kiri-serong, kanan-serong) ke arah gerak buat "ngelihat"
--- ada tembok/halangan atau enggak SEBELUM nabrak, bukan nunggu sampe beneran stuck.
--- Diperpendek dari 6 - raycast jarak jauh bikin dia "nyimpang" dari waypoint yang
--- sebenernya udah bener dari PathfindingService, cuma gara-gara ada obstacle kecil
--- yang sebenernya bukan masalah (karakter emang harus lewat situ sesuai rute).
--- Sekarang cuma aktif kalau beneran udah deket mau nabrak.
-local AVOID_RAY_LENGTH = 3
-local AVOID_SIDE_ANGLE = 35 -- derajat, buat whisker kiri/kanan
-
-local function getAvoidRaycastParams()
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {Character}
-    params.IgnoreWater = true
-    return params
-end
-
--- Return: steered direction (Vector3, flat/world, udah di-unit-kan) yang udah
--- disesuaikan buat ngehindarin halangan, atau direction asli kalau depan aman.
-local function getSteeredDirection(flatDir)
-    local params = getAvoidRaycastParams()
-    -- Mundurin titik awal ray sedikit (0.5 stud ke arah berlawanan) - ini penting
-    -- karena kalau badan lagi NEMPEL ke tembok (misal abis mencet E deket pintu),
-    -- origin ray bisa ketanam DI DALAM part itu. Roblox gak bisa deteksi hit kalau
-    -- ray mulai dari dalam geometry, jadi raycast-nya jadi "buta" di situ.
-    -- Mundurin dikit bikin origin-nya balik ke luar part, raycast jadi valid lagi.
-    local origin = RootPart.Position + Vector3.new(0, 1, 0) - (flatDir * 0.5)
-
-    local centerResult = workspace:Raycast(origin, flatDir * AVOID_RAY_LENGTH, params)
-    if not centerResult then
-        return flatDir -- depan aman, jalan lurus aja
-    end
-
-    -- Depan ke-halangin, cek whisker kiri & kanan buat nyari sisi yang kosong
-    local leftDir = (CFrame.Angles(0, math.rad(AVOID_SIDE_ANGLE), 0) * flatDir)
-    local rightDir = (CFrame.Angles(0, -math.rad(AVOID_SIDE_ANGLE), 0) * flatDir)
-
-    local leftResult = workspace:Raycast(origin, leftDir * AVOID_RAY_LENGTH, params)
-    local rightResult = workspace:Raycast(origin, rightDir * AVOID_RAY_LENGTH, params)
-
-    local leftClear = leftResult == nil
-    local rightClear = rightResult == nil
-
-    if leftClear and not rightClear then
-        return leftDir.Unit
-    elseif rightClear and not leftClear then
-        return rightDir.Unit
-    elseif leftClear and rightClear then
-        -- Dua-duanya kosong, default ke kanan
-        return rightDir.Unit
-    else
-        -- Dua-duanya ke-halangin juga, pakai yang jarak hit-nya paling jauh (paling longgar)
-        local leftDist = leftResult and (leftResult.Position - origin).Magnitude or 0
-        local rightDist = rightResult and (rightResult.Position - origin).Magnitude or 0
-        if leftDist > rightDist then
-            return leftDir.Unit
-        else
-            return rightDir.Unit
-        end
-    end
-end
-
--- Tentukan kombinasi W/A/S/D berdasarkan arah kamera SAAT INI (read-only)
--- relatif ke targetPos, dengan penghindaran halangan otomatis lewat raycast.
--- objectSpace.Z negatif = depan kamera, positif = belakang.
--- objectSpace.X positif = kanan kamera, negatif = kiri.
-local function updateMoveKeysTowards(targetPos)
-    local camera = workspace.CurrentCamera
-    if not camera then
-        releaseAllMoveKeys()
-        return
-    end
-
-    local origin = RootPart.Position
-    local flatDir = Vector3.new(targetPos.X - origin.X, 0, targetPos.Z - origin.Z)
-
-    if flatDir.Magnitude < 0.1 then
-        releaseAllMoveKeys()
-        return
-    end
-    flatDir = flatDir.Unit
-
-    -- Cek halangan di depan, steer kalau perlu
-    local success, steeredDir = pcall(getSteeredDirection, flatDir)
-    if success and steeredDir then
-        flatDir = steeredDir
-    end
-
-    local objectSpace = camera.CFrame:VectorToObjectSpace(flatDir)
-
-    setKeyHeld(Enum.KeyCode.W, objectSpace.Z < -0.15)
-    setKeyHeld(Enum.KeyCode.S, objectSpace.Z > 0.15)
-    setKeyHeld(Enum.KeyCode.D, objectSpace.X > 0.15)
-    setKeyHeld(Enum.KeyCode.A, objectSpace.X < -0.15)
-end
-
 local function enableMovementMode()
-    -- Gak perlu setup apa-apa; AutoRotate dibiarkan default (true)
+    -- AutoRotate dibiarkan default (true)
 end
 
 local function disableMovementMode()
     releaseAllMoveKeys()
 end
 
--- ============ Indikator arah (visual aja, biar keliatan dia niat ke mana) ============
+-- ============ Indikator arah (visual aja) ============
+-- Part indikator ditaruh di workspace (bukan di Character) supaya tetap hidup
+-- setelah respawn.
 local IndicatorBeam
 do
     local originPart = Instance.new("Part")
@@ -1406,13 +1308,12 @@ do
     originPart.Size = Vector3.new(0.2, 0.2, 0.2)
     originPart.Transparency = 1
     originPart.CanCollide = false
-    originPart.Anchored = false
-    originPart.Massless = true
+    originPart.CanQuery = false
+    originPart.CanTouch = false
+    originPart.Anchored = true
     originPart.CFrame = RootPart.CFrame
-    originPart.Parent = Character
+    originPart.Parent = workspace
 
-    -- Gak pakai WeldConstraint biar gak ada risiko ganggu physics/joint karakter -
-    -- posisinya cukup di-update manual tiap frame (cuma buat visual doang)
     RunService.Heartbeat:Connect(function()
         if RootPart and RootPart.Parent then
             originPart.CFrame = RootPart.CFrame
@@ -1424,6 +1325,8 @@ do
     targetPart.Size = Vector3.new(0.2, 0.2, 0.2)
     targetPart.Transparency = 1
     targetPart.CanCollide = false
+    targetPart.CanQuery = false
+    targetPart.CanTouch = false
     targetPart.Anchored = true
     targetPart.Parent = workspace
 
@@ -1441,10 +1344,7 @@ do
     beam.Enabled = false
     beam.Parent = originPart
 
-    IndicatorBeam = {
-        beam = beam,
-        targetPart = targetPart,
-    }
+    IndicatorBeam = { beam = beam, targetPart = targetPart }
 end
 
 local function showDirectionIndicator(targetPos)
@@ -1456,49 +1356,7 @@ local function hideDirectionIndicator()
     IndicatorBeam.beam.Enabled = false
 end
 
--- ============ TWEEN MOVER (BodyVelocity + BodyGyro) ============
--- Bukan TweenService: karakter digerakin lewat fisika. Tiap Heartbeat, velocity
--- di-set lurus ke target dengan kecepatan Settings.TweenSpeed (stud/detik), badan
--- dihadapin ke arah gerak lewat BodyGyro. Selama tween Humanoid.PlatformStand = true
--- biar animasi/fisika jalan bawaan gak ngelawan. Watchdog: kalau dalam 1 detik
--- gerak < 2 stud (nyangkut), noclip dinyalain sampai segmen ini selesai.
-local TWEEN_STOP_DISTANCE = 2.5
-local TweenNoclip = { conn = nil, saved = {} }
-
-local function setTweenNoclip(on)
-    if on then
-        if TweenNoclip.conn then return end
-        TweenNoclip.saved = {}
-        TweenNoclip.conn = RunService.Stepped:Connect(function()
-            local char = LocalPlayer.Character
-            if not char then return end
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") and part.CanCollide then
-                    TweenNoclip.saved[part] = true
-                    part.CanCollide = false
-                end
-            end
-        end)
-    else
-        if TweenNoclip.conn then
-            TweenNoclip.conn:Disconnect()
-            TweenNoclip.conn = nil
-        end
-        for part in pairs(TweenNoclip.saved) do
-            if part and part.Parent then
-                part.CanCollide = true
-            end
-        end
-        TweenNoclip.saved = {}
-    end
-end
-
--- ============ Geppo pass ============
--- Di source, selama tween jalan ada loop yang manggil skill Geppo/Sky Walk milik
--- game (Events.Skill:InvokeServer) tiap ~0.1 detik, jadi server ngeliat karakter
--- lagi "pakai skill gerak udara". Skill yang dipanggil tergantung FightingStyle.
--- Di sini cuma manggil skill-nya aja (stamina TIDAK di-spoof), jadi stamina
--- tetap kepake normal. Kalau karakter gak punya skill-nya, gak ada efek.
+-- ============ Geppo / Sky Walk (dipanggil dari tween & mainLoop) ============
 local function fireGeppoOnce()
     pcall(function()
         local char = LocalPlayer.Character
@@ -1527,49 +1385,81 @@ local function fireGeppoOnce()
     end)
 end
 
--- Return: true kalau sampai, false kalau timeout/dibatalkan/nyangkut beneran
--- Deteksi stuck berbasis PROGRESS (jarak ke target berkurang atau enggak), bukan
--- cuma "badan gerak atau enggak" - jadi karakter yang mantul-mantul di atas atap
--- (misal gara-gara Geppo) tetap kedeteksi nyangkut.
--- Urutan penanganan kalau nyangkut:
---   1) noclip nyala (tembus atap/tembok)
---   2) kalau masih gak ada progress beberapa kali -> return false, nanti
---      walkToDoorHeld ngitung ulang rute dari posisi sekarang (max 3x), lalu
---      door itu di-skip & dihitung.
-local NOCLIP_FROM_START = false -- true = noclip nyala dari awal tween (lebih "nembus", tapi lebih mencolok)
+-- ============ NAV ============
+local Nav = {
+    -- path
+    Variants = {},          -- diisi di bawah (urutan percobaan AgentRadius)
+    MaxAttempts = 3,        -- hitung ulang path dari posisi sekarang sampai sekian kali
+    MinGap = 6,             -- waypoint lebih rapat dari ini dibuang (kecuali belokan/lompat)
+    TurnAngle = 35,         -- derajat; belokan setajam ini wajib dipertahankan
+    -- arrival
+    ReachFlat = 4.5,        -- jarak datar waypoint tengah dianggap kena (mode WASD)
+    ReachFinal = 3,         -- jarak datar waypoint terakhir (mode WASD)
+    PointArrive = 4,        -- target non-pintu (Witch/Merchant): jarak datar dianggap sampai
+    DoorStandOffset = 5,    -- titik berdiri di depan/belakang pintu (stud)
+    -- mode WASD
+    SegTimeout = 8,         -- detik maksimal per waypoint
+    StuckInterval = 0.6,
+    StuckDist = 1.0,
+    MaxStrikes = 3,
+    -- roof escape
+    MinGroundY = 3,         -- permukaan di bawah ini dianggap air/bukan tujuan
+    MaxExitPaths = 16,      -- maksimal kandidat titik keluar yang di-path
+    -- tween
+    TweenStop = 2.5,
+    TweenReachMid = 3.5,
+    GroundFollow = true,
+    GroundGain = 12,
+    ProgressInterval = 0.8,
+    MinProgress = 1.5,
+    NearFlat = 4,
+    MaxStuckChecks = 3,     -- cek progress berturut-turut tanpa kemajuan = tween nyerah (path dihitung ulang)
+}
 
--- Tween NEMPEL GROUND: selama noclip belum nyala, gerak cuma horizontal ke arah target,
--- sedangkan tinggi badan diikutin dari lantai di bawahnya (raycast ke bawah). Jadi
--- karakter gak naik ke atas (atap / udara) dan kalau lagi melayang (mis. abis Geppo)
--- otomatis diturunin sampai napak ground. Kalau noclip nyala (lagi nyangkut), gerak
--- balik lurus 3D ke target biar bisa tembus.
-local TWEEN_GROUND_FOLLOW = true
-local GROUND_RAY_LENGTH = 80  -- seberapa jauh ke bawah nyari ground (stud)
-local GROUND_FOLLOW_GAIN = 12 -- makin besar, makin cepat nyesuaiin tinggi ke ground
-
--- Tinggi pusat HumanoidRootPart dari lantai pas karakter berdiri.
-local function getStandingHeight(hum, root)
-    if hum.RigType == Enum.HumanoidRigType.R6 then
-        return 3
-    end
-    return hum.HipHeight + root.Size.Y / 2
+function Nav.agent(radius)
+    return {
+        AgentRadius = radius,
+        AgentHeight = 5,
+        AgentCanJump = true,
+        AgentJumpHeight = 7,
+        AgentMaxSlope = 45,
+        WaypointSpacing = 8,
+    }
 end
 
--- ============ Cari tinggi ground di bawah karakter ============
--- Raycast ke bawah dari posisi karakter. Yang diabaikan: karakter sendiri, part yang
--- CanCollide=false, part buatan script ini (target/indikator), dan model yang punya
--- Humanoid (monster / pemain lain), biar gak "napak" di kepala monster.
--- Return: Y permukaan ground, atau nil kalau gak ada ground di bawah.
-local GroundRayParams = RaycastParams.new()
-GroundRayParams.FilterType = Enum.RaycastFilterType.Exclude
-GroundRayParams.IgnoreWater = true
-pcall(function() GroundRayParams.RespectCanCollide = true end)
+Nav.Variants = { Nav.agent(3), Nav.agent(2), Nav.agent(1.5) }
 
-local function getGroundY(pos)
-    local ignore = {LocalPlayer.Character}
+-- ---------- util raycast ----------
+function Nav.worldIgnore()
+    local list = {}
+    for _, name in ipairs({"PlayerCharacters", "NPCs", "Effects"}) do
+        local folder = workspace:FindFirstChild(name)
+        if folder then table.insert(list, folder) end
+    end
+    return list
+end
+
+function Nav.rayParams(extra)
+    local p = RaycastParams.new()
+    p.FilterType = Enum.RaycastFilterType.Exclude
+    p.IgnoreWater = true
+    pcall(function() p.RespectCanCollide = true end)
+    local list = { LocalPlayer.Character }
+    if extra then
+        for _, v in ipairs(extra) do table.insert(list, v) end
+    end
+    p.FilterDescendantsInstances = list
+    return p
+end
+
+-- Y permukaan di bawah `pos`. Model ber-Humanoid (monster/pemain) & part script ini diabaikan.
+function Nav.groundY(pos, length, params)
+    length = length or 80
+    params = params or Nav.rayParams(Nav.worldIgnore())
+    local ignore = params.FilterDescendantsInstances
     for _ = 1, 5 do
-        GroundRayParams.FilterDescendantsInstances = ignore
-        local result = workspace:Raycast(pos, Vector3.new(0, -GROUND_RAY_LENGTH, 0), GroundRayParams)
+        params.FilterDescendantsInstances = ignore
+        local result = workspace:Raycast(pos, Vector3.new(0, -length, 0), params)
         if not result then return nil end
 
         local inst = result.Instance
@@ -1585,87 +1475,248 @@ local function getGroundY(pos)
     return nil
 end
 
--- ============ Kondisi "noclip dilarang": hit / stun / ragdoll ============
--- Dipakai CUMA buat ngatur noclip di dalam tween. Tween-nya sendiri tetap jalan.
--- Selama kondisi ini aktif noclip dimatiin (collision balik) biar badan yang lagi
--- ragdoll gak tembus tanah; setelah selesai noclip balik diatur watchdog progress.
-local HIT_NOCLIP_OFF_TIME = 1.5 -- detik noclip dimatiin setelah HP turun (kena hit)
-local NOCLIP_BLOCK_MAX = 6      -- pengaman: satu kejadian maksimal nahan noclip segini lama
-
--- Belum pasti GPO nge-ragdoll lewat apa, jadi dicek beberapa cara umum:
---   Humanoid state (Ragdoll/FallingDown/Physics), attribute Ragdoll/Ragdolled di
---   Character, atau ada sendi Motor6D yang dimatiin (cara ragdoll paling umum).
--- Alasannya di-print sekali per jenis biar kelihatan mana yang kena di game-mu.
-local RAGDOLL_STATES = {
-    [Enum.HumanoidStateType.Ragdoll] = true,
-    [Enum.HumanoidStateType.FallingDown] = true,
-    [Enum.HumanoidStateType.Physics] = true,
-}
-local RagdollReasonPrinted = {}
-local RagdollCache = { at = 0, value = false }
-
-local function noteRagdoll(reason)
-    if not RagdollReasonPrinted[reason] then
-        RagdollReasonPrinted[reason] = true
-        print("[AutoEventDoor] Ragdoll terdeteksi (" .. reason .. "), noclip dimatiin sementara.")
-    end
+function Nav.standingHeight(hum, root)
+    if hum.RigType == Enum.HumanoidRigType.R6 then return 3 end
+    return hum.HipHeight + root.Size.Y / 2
 end
 
--- Dicek paling sering tiap 0.1 detik (hasil di-cache) biar gak berat
-local function isRagdolledNow()
-    local now = tick()
-    if now - RagdollCache.at < 0.1 then return RagdollCache.value end
-    RagdollCache.at = now
+function Nav.isCovered(pos)
+    local r = workspace:Raycast(pos, Vector3.new(0, 200, 0), Nav.rayParams(Nav.worldIgnore()))
+    return r ~= nil
+end
 
-    local result = false
-    local hum, char = Humanoid, LocalPlayer.Character
+-- Garis pandang ke pintu: kosong, atau yang kena memang bagian pintu itu sendiri
+function Nav.canSee(target, targetPos)
+    local origin = RootPart.Position + Vector3.new(0, 1.5, 0)
+    local r = workspace:Raycast(origin, targetPos - origin, Nav.rayParams(Nav.worldIgnore()))
+    return r == nil or r.Instance:IsDescendantOf(target)
+end
 
-    if hum and hum.Parent then
-        local ok, state = pcall(function() return hum:GetState() end)
-        if ok and RAGDOLL_STATES[state] then
-            noteRagdoll("state " .. tostring(state))
-            result = true
+function Nav.jump()
+    pcall(function() Humanoid.Jump = true end)
+end
+
+-- ---------- path ----------
+-- Return: waypoints, path   (nil kalau semua varian gagal)
+function Nav.computePath(fromPos, toPos, maxVariants)
+    local n = math.min(maxVariants or #Nav.Variants, #Nav.Variants)
+    for i = 1, n do
+        local path = PathfindingService:CreatePath(Nav.Variants[i])
+        local ok = pcall(function()
+            path:ComputeAsync(fromPos, toPos)
+        end)
+        if ok and path.Status == Enum.PathStatus.Success then
+            return path:GetWaypoints(), path
         end
     end
+    return nil
+end
 
-    if not result and char then
-        if char:GetAttribute("Ragdoll") == true or char:GetAttribute("Ragdolled") == true then
-            noteRagdoll("attribute Ragdoll")
-            result = true
-        else
-            for _, d in ipairs(char:GetDescendants()) do
-                if d:IsA("Motor6D") and not d.Enabled then
-                    noteRagdoll("Motor6D " .. d.Name .. " dimatiin")
-                    result = true
-                    break
-                end
+function Nav.pathLength(waypoints)
+    local len, prev = 0, RootPart.Position
+    for _, w in ipairs(waypoints) do
+        len = len + (w.Position - prev).Magnitude
+        prev = w.Position
+    end
+    return len
+end
+
+-- Buang waypoint yang terlalu rapat, tapi belokan tajam & titik lompat selalu dipertahankan
+function Nav.filter(waypoints)
+    local out = {}
+    local last = RootPart.Position
+    local lastDir = nil
+
+    for i, wp in ipairs(waypoints) do
+        local gap = (wp.Position - last).Magnitude
+        local isLast = (i == #waypoints)
+        local isJump = wp.Action == Enum.PathWaypointAction.Jump
+
+        local sharp = false
+        if lastDir and gap > 0.1 then
+            local d = (wp.Position - last).Unit
+            local angle = math.deg(math.acos(math.clamp(lastDir:Dot(d), -1, 1)))
+            sharp = angle >= Nav.TurnAngle
+        end
+
+        if isLast or isJump or sharp or gap >= Nav.MinGap then
+            if gap > 0.1 then lastDir = (wp.Position - last).Unit end
+            table.insert(out, wp)
+            last = wp.Position
+        end
+    end
+    return out
+end
+
+-- Titik berdiri di depan & belakang pintu (pivot +/- LookVector * offset), di-snap ke lantai
+function Nav.doorGoals(door)
+    local pivot
+    pcall(function() pivot = door:GetPivot() end)
+    if not pivot then return {} end
+
+    local look = Vector3.new(pivot.LookVector.X, 0, pivot.LookVector.Z)
+    if look.Magnitude < 0.1 then return {} end
+    look = look.Unit
+
+    local goals = {}
+    for _, sign in ipairs({1, -1}) do
+        local p = pivot.Position + look * (Nav.DoorStandOffset * sign)
+        local gy = Nav.groundY(p + Vector3.new(0, 2, 0), 30)
+        table.insert(goals, gy and Vector3.new(p.X, gy, p.Z) or p)
+    end
+    return goals
+end
+
+-- Dari beberapa kandidat tujuan, pilih yang path-nya ada & paling pendek
+-- Return: goal, waypoints, path
+function Nav.pickGoal(goals)
+    local best, bestWps, bestPath, bestLen
+    for _, g in ipairs(goals) do
+        local wps, path = Nav.computePath(RootPart.Position, g)
+        if wps then
+            local len = Nav.pathLength(wps)
+            if not bestLen or len < bestLen then
+                best, bestWps, bestPath, bestLen = g, wps, path, len
             end
         end
     end
-
-    RagdollCache.value = result
-    return result
+    return best, bestWps, bestPath
 end
 
-local function tweenToPoint(targetPos, timeout, forceNoclip)
-    timeout = timeout or 8
-
-    local root, hum = RootPart, Humanoid
-    if not root or not root.Parent or not hum or not hum.Parent then
-        return false
+-- ---------- driver 1: WASD ----------
+-- Tombol relatif ke kamera (kamera cuma dibaca, tidak pernah diputar)
+function Nav.steer(targetPos)
+    local camera = workspace.CurrentCamera
+    if not camera then
+        releaseAllMoveKeys()
+        return
     end
 
-    -- PENYEBAB UTAMA tenggelam ke tanah + noclip terus-terusan:
-    -- waypoint dari PathfindingService itu titik di LANTAI, sedangkan pusat
-    -- HumanoidRootPart melayang ~3 stud di atas lantai. Jarak 3D ke waypoint jadi
-    -- gak pernah bisa < TWEEN_STOP_DISTANCE (2.5) selama karakter berdiri di atas
-    -- lantai. Akibatnya: karakter ditekan ke bawah, gak ada progress, watchdog
-    -- nyalain noclip, lalu karakter tembus lantai buat "nyampe" ke titik itu.
-    -- Solusi: tujuan dinaikin setinggi badan berdiri.
-    local standH = getStandingHeight(hum, root)
-    local goal = targetPos + Vector3.new(0, standH, 0)
+    local o = RootPart.Position
+    local flat = Vector3.new(targetPos.X - o.X, 0, targetPos.Z - o.Z)
+    if flat.Magnitude < 0.1 then
+        releaseAllMoveKeys()
+        return
+    end
 
-    showDirectionIndicator(goal)
+    local obj = camera.CFrame:VectorToObjectSpace(flat.Unit)
+    setKeyHeld(Enum.KeyCode.W, obj.Z < -0.15)
+    setKeyHeld(Enum.KeyCode.S, obj.Z > 0.15)
+    setKeyHeld(Enum.KeyCode.D, obj.X > 0.15)
+    setKeyHeld(Enum.KeyCode.A, obj.X < -0.15)
+end
+
+function Nav.unstick(strike)
+    releaseAllMoveKeys()
+    Nav.jump()
+    task.wait(0.25)
+    if strike <= 1 then return end
+
+    setKeyHeld(Enum.KeyCode.S, true)
+    task.wait(0.4)
+    setKeyHeld(Enum.KeyCode.S, false)
+
+    local key = (strike % 2 == 0) and Enum.KeyCode.D or Enum.KeyCode.A
+    setKeyHeld(key, true)
+    task.wait(0.5)
+    setKeyHeld(key, false)
+
+    Nav.jump()
+    task.wait(0.2)
+end
+
+-- Return: "Arrived" | "Finished" | "Blocked" | "Stuck" | "Stopped"
+function Nav.followWalk(waypoints, isDone, state)
+    local i, n = 1, #waypoints
+    local segStart = tick()
+    local lastPos, lastCheck = RootPart.Position, tick()
+    local strikes = 0
+    local jumped = false
+
+    local function finish(status)
+        releaseAllMoveKeys()
+        hideDirectionIndicator()
+        return status
+    end
+
+    while Enabled do
+        if isDone() then return finish("Arrived") end
+        if state and state.blocked then return finish("Blocked") end
+        if i > n then return finish("Finished") end
+
+        -- Stun: lepas tombol, tunggu, jangan dihitung sebagai macet
+        if isStunned() then
+            releaseAllMoveKeys()
+            local t0 = tick()
+            waitUntilNotStunned()
+            segStart = segStart + (tick() - t0)
+            lastPos, lastCheck, strikes = RootPart.Position, tick(), 0
+            continue
+        end
+
+        local wp = waypoints[i]
+        local pos = RootPart.Position
+        local flatDist = Vector3.new(wp.Position.X - pos.X, 0, wp.Position.Z - pos.Z).Magnitude
+        local reach = (i == n) and Nav.ReachFinal or Nav.ReachFlat
+
+        -- Waypoint bertanda Jump: lompat sekali begitu sudah dekat
+        if wp.Action == Enum.PathWaypointAction.Jump and not jumped and flatDist <= 8 then
+            jumped = true
+            Nav.jump()
+        end
+
+        -- Kena: langsung lanjut ke waypoint berikutnya TANPA lepas tombol (gak ada patah-patah)
+        if flatDist <= reach then
+            i = i + 1
+            segStart, jumped, strikes = tick(), false, 0
+            lastPos, lastCheck = RootPart.Position, tick()
+            continue
+        end
+
+        if (tick() - segStart) > Nav.SegTimeout then
+            return finish("Stuck")
+        end
+
+        RunService.Heartbeat:Wait()
+        Nav.steer(wp.Position)
+        showDirectionIndicator(wp.Position)
+
+        if tick() - lastCheck >= Nav.StuckInterval then
+            if (RootPart.Position - lastPos).Magnitude < Nav.StuckDist then
+                strikes = strikes + 1
+                if strikes >= Nav.MaxStrikes then return finish("Stuck") end
+                Nav.unstick(strikes)
+            else
+                strikes = 0
+            end
+            lastPos, lastCheck = RootPart.Position, tick()
+        end
+    end
+
+    return finish("Stopped")
+end
+
+-- ---------- driver 2: tween fisika (BodyVelocity + BodyGyro) ----------
+-- Satu BodyVelocity untuk SELURUH rangkaian titik (gak dibuat-hancurin tiap waypoint),
+-- jadi jalannya mulus. Horizontal ke titik aktif, tinggi ngikutin lantai di bawah
+-- (kecuali waypoint-nya lebih tinggi = tangga/ledge). TANPA noclip: kalau gak ada
+-- progress beberapa kali berturut-turut, tween berhenti dengan reason "stuck" dan
+-- goTo menghitung ulang path dari posisi sekarang. Selama stun, watchdog dijeda.
+-- Return: reachedFinal(bool), reason(string)
+function Nav.tweenAlong(points, timeout, isDone, state)
+    local root, hum = RootPart, Humanoid
+    if not root or not root.Parent or not hum or not hum.Parent or #points == 0 then
+        return false, "invalid"
+    end
+
+    timeout = timeout or 12
+    local standH = Nav.standingHeight(hum, root)
+    local up = Vector3.new(0, standH, 0)
+    local n = #points
+    local idx = 1
+    local groundParams = Nav.rayParams(Nav.worldIgnore())
+
+    showDirectionIndicator(points[1] + up)
 
     local gyro = Instance.new("BodyGyro")
     gyro.Name = "EvDoorTweenGyro"
@@ -1685,129 +1736,85 @@ local function tweenToPoint(targetPos, timeout, forceNoclip)
     hum.AutoRotate = false
 
     local startTime = tick()
-    local noclipOn = false
-    local reached = false
+    local reached, reason = false, "timeout"
 
-    if NOCLIP_FROM_START or forceNoclip then
-        noclipOn = true
-        setTweenNoclip(true)
-    end
-
-    local PROGRESS_CHECK_INTERVAL = 0.8 -- cek progress tiap sekian detik
-    local MIN_PROGRESS = 1.5            -- minimal jarak yang harus berkurang per interval
-    local MAX_NOCLIP_FAILS = 3          -- udah noclip tapi tetep gak progress sekian kali = nyerah
-    local NEAR_FLAT_DISTANCE = 4        -- deket target secara horizontal = bukan nyangkut
-    local lastDist = (goal - root.Position).Magnitude
+    local lastDist = (points[1] + up - root.Position).Magnitude
     local lastCheck = tick()
-    local noclipFails = 0
-
-    -- Catat kapan terakhir kena hit (HP turun) selama tween. Dipakai buat
-    -- matiin noclip sementara; tween-nya sendiri tetap jalan.
-    local lastHealth = hum.Health
-    local lastHitTime = 0
-    local hitCount = 0
-    local healthConn = hum.HealthChanged:Connect(function(h)
-        if h < lastHealth - 0.01 then
-            lastHitTime = tick()
-            hitCount = hitCount + 1
-            if hitCount == 1 then
-                print(string.format("[AutoEventDoor] Kena hit saat tween (HP %.0f -> %.0f) di %s",
-                    lastHealth, h, tostring(root.Position)))
-            end
-        end
-        lastHealth = h
-    end)
-
-    -- true = noclip lagi dilarang (baru kena hit / stun / ragdoll). Ada batas
-    -- NOCLIP_BLOCK_MAX biar kalau deteksi nyangkut true terus, noclip tetap bisa
-    -- dipakai lagi (gak bikin karakter mentok selamanya).
-    local blockSince = nil
-    local function noclipBlocked()
-        local blocked = (tick() - lastHitTime) < HIT_NOCLIP_OFF_TIME
-            or isRagdolledNow()
-            or isStunned()
-
-        if blocked then
-            blockSince = blockSince or tick()
-            return (tick() - blockSince) <= NOCLIP_BLOCK_MAX
-        end
-
-        blockSince = nil
-        return false
-    end
-    local wasBlocked = false
+    local stuckChecks = 0
 
     local tweening = true
     if Settings.GeppoPass then
         task.spawn(function()
             while tweening and Enabled do
-                -- Geppo ditembak terus selama tween jalan
-                fireGeppoOnce() -- InvokeServer, jadi otomatis nunggu server
+                fireGeppoOnce()
                 task.wait(0.1)
             end
         end)
     end
 
     while Enabled and (tick() - startTime) < timeout do
-        if not root.Parent then break end
-
-        local pos = root.Position
-        local delta = goal - pos
-        local dist = delta.Magnitude
-        local flat = Vector3.new(delta.X, 0, delta.Z)
-
-        -- Sampai: dekat 3D, atau sudah pas di atas titik (selisih tinggi kecil)
-        if dist <= TWEEN_STOP_DISTANCE
-            or (flat.Magnitude <= TWEEN_STOP_DISTANCE and math.abs(delta.Y) <= 4) then
-            reached = true
+        if not root.Parent then reason = "dead" break end
+        if state and state.blocked then reason = "blocked" break end
+        if isDone and isDone() then
+            reached, reason = true, "done"
             break
         end
 
-        -- Kena hit / stun / ragdoll: matiin noclip (tween TETAP jalan)
-        local blocked = noclipBlocked()
-        if blocked then
-            if noclipOn then
-                setTweenNoclip(false)
-                noclipOn = false
+        local pos = root.Position
+        local isFinal = (idx == n)
+        local goal = points[idx] + up
+        local delta = goal - pos
+        local flat = Vector3.new(delta.X, 0, delta.Z)
+        local dist = delta.Magnitude
+
+        if isFinal then
+            if dist <= Nav.TweenStop or (flat.Magnitude <= Nav.TweenStop and math.abs(delta.Y) <= 4) then
+                reached, reason = true, "final"
+                break
             end
-            wasBlocked = true
-        elseif wasBlocked then
-            wasBlocked = false
-            -- Selesai: waktu hit/ragdoll jangan dihitung sebagai "nyangkut"
+        elseif flat.Magnitude <= Nav.TweenReachMid then
+            -- waypoint tengah kena: ganti target tanpa berhenti
+            idx = idx + 1
+            local g = points[idx] + up
+            lastDist = (g - root.Position).Magnitude
             lastCheck = tick()
-            lastDist = dist
-            noclipFails = 0
-            -- Tween yang memang minta noclip dari awal: nyalain lagi
-            if NOCLIP_FROM_START or forceNoclip then
-                noclipOn = true
-                setTweenNoclip(true)
-            end
+            stuckChecks = 0
+            showDirectionIndicator(g)
+            continue
         end
 
         local dt = RunService.Heartbeat:Wait()
-
         local maxSpeed = math.max(Settings.TweenSpeed, 1)
 
-        if TWEEN_GROUND_FOLLOW and not noclipOn then
-            -- NEMPEL GROUND: horizontal ke target, tinggi ngikutin lantai di bawah
+        if Nav.GroundFollow then
             local flatDist = flat.Magnitude
-            local hSpeed = math.min(maxSpeed, flatDist / math.max(dt, 1 / 60))
-            local hVel = Vector3.zero
-            if flatDist > 0.05 then
-                hVel = flat.Unit * hSpeed
+            local hSpeed = maxSpeed
+            if isFinal then
+                hSpeed = math.min(maxSpeed, flatDist / math.max(dt, 1 / 60))
             end
+            local hVel = Vector3.zero
+            if flatDist > 0.05 then hVel = flat.Unit * hSpeed end
 
             local curPos = root.Position
-            local groundY = getGroundY(curPos)
-            local desiredY = groundY and (groundY + standH) or goal.Y
-            local vy = math.clamp((desiredY - curPos.Y) * GROUND_FOLLOW_GAIN, -maxSpeed, maxSpeed)
-
+            local gY = Nav.groundY(curPos, 80, groundParams)
+            local desiredY = gY and (gY + standH) or goal.Y
+            -- Waypoint lebih tinggi dari lantai di bawah (tangga/ledge): naik ke tingginya
+            if (goal.Y - standH) > (gY or -math.huge) + 1 and flatDist < 8 then
+                desiredY = goal.Y
+            end
+            local vy = math.clamp((desiredY - curPos.Y) * Nav.GroundGain, -maxSpeed, maxSpeed)
             vel.Velocity = Vector3.new(hVel.X, vy, hVel.Z)
         else
-            -- Noclip nyala (lagi nyangkut): lurus 3D ke target biar bisa tembus
-            -- kecepatan dibatesin biar gak overshoot pas udah deket
-            local speed = math.min(maxSpeed, dist / math.max(dt, 1 / 60))
-            vel.Velocity = delta.Unit * speed
+            -- GroundFollow dimatiin: lurus 3D ke titik aktif
+            if dist > 0.05 then
+                local speed = maxSpeed
+                if isFinal then
+                    speed = math.min(maxSpeed, dist / math.max(dt, 1 / 60))
+                end
+                vel.Velocity = delta.Unit * speed
+            else
+                vel.Velocity = Vector3.zero
+            end
         end
 
         if flat.Magnitude > 0.5 then
@@ -1815,35 +1822,27 @@ local function tweenToPoint(targetPos, timeout, forceNoclip)
         end
         IndicatorBeam.targetPart.Position = goal
 
-        -- Watchdog progress
-        if not blocked and tick() - lastCheck >= PROGRESS_CHECK_INTERVAL then
+        -- Watchdog progress ke titik aktif (dijeda selama stun)
+        if isStunned() then
+            lastCheck, lastDist, stuckChecks = tick(), dist, 0
+        elseif tick() - lastCheck >= Nav.ProgressInterval then
             local progress = lastDist - dist
-            -- Deket target secara horizontal = lagi nyesuaiin tinggi, bukan nyangkut
-            if progress < MIN_PROGRESS and flat.Magnitude > NEAR_FLAT_DISTANCE then
-                if not noclipOn then
-                    noclipOn = true
-                    setTweenNoclip(true)
-                else
-                    noclipFails = noclipFails + 1
-                    if noclipFails >= MAX_NOCLIP_FAILS then
-                        print("[AutoEventDoor] Tween gak ada progress walau noclip, nyerah di titik ini.")
-                        break
-                    end
+            if progress < Nav.MinProgress and flat.Magnitude > Nav.NearFlat then
+                stuckChecks = stuckChecks + 1
+                if stuckChecks >= Nav.MaxStuckChecks then
+                    reason = "stuck"
+                    break
                 end
             else
-                noclipFails = 0
+                stuckChecks = 0
             end
             lastDist, lastCheck = dist, tick()
         end
     end
 
     tweening = false
-    healthConn:Disconnect()
     pcall(function() vel:Destroy() end)
     pcall(function() gyro:Destroy() end)
-    if noclipOn then
-        setTweenNoclip(false)
-    end
     pcall(function()
         root.AssemblyLinearVelocity = Vector3.zero
         root.AssemblyAngularVelocity = Vector3.zero
@@ -1854,271 +1853,181 @@ local function tweenToPoint(targetPos, timeout, forceNoclip)
     end)
     hideDirectionIndicator()
 
-    return reached
+    return reached, reason
 end
 
--- ============ Movement per-waypoint, dengan deteksi stuck beneran ============
--- Return: true kalau sampai, false kalau stuck/timeout/dibatalkan
-local function walkToPointHeld(targetPos, timeout)
-    timeout = timeout or 8
+-- Return: "Arrived" | "Finished" | "Blocked" | "Stuck" | "Stopped"
+function Nav.followTween(waypoints, isDone, state)
+    local points = {}
+    for _, w in ipairs(waypoints) do
+        table.insert(points, w.Position)
+    end
+    local timeout = Nav.pathLength(waypoints) / math.max(Settings.TweenSpeed, 1) * 2.5 + 10
 
-    -- Mode tween: gerak lewat BodyVelocity, bukan hold WASD
+    local reached, reason = Nav.tweenAlong(points, timeout, isDone, state)
+
+    if isDone() then return "Arrived" end
+    if reached then return "Finished" end
+    if not Enabled then return "Stopped" end
+    if reason == "blocked" then return "Blocked" end
+    return "Stuck"
+end
+
+function Nav.follow(waypoints, isDone, state)
     if Settings.TweenMode then
-        return tweenToPoint(targetPos, timeout)
+        return Nav.followTween(waypoints, isDone, state)
     end
+    return Nav.followWalk(waypoints, isDone, state)
+end
 
-    local startTime = tick()
-    enableMovementMode()
-    showDirectionIndicator(targetPos)
+-- ---------- keluar dari bawah atap ----------
+-- Sampling cincin (radius 10..160, tiap 22.5 derajat). Tiap titik di-raycast dari
+-- 300 stud di atas ke bawah: yang kena permukaan datar & di atas air = kandidat titik
+-- terbuka. Kandidat terdekat yang path-nya ada dipakai sebagai jalan keluar.
+-- Return: titik keluar, waypoints, path   (nil kalau gak ada)
+function Nav.findExit()
+    local origin = RootPart.Position
+    local params = Nav.rayParams(Nav.worldIgnore())
+    local tried = 0
 
-    local lastPos = RootPart.Position
-    local lastMoveCheck = tick()
-    local STUCK_CHECK_INTERVAL = 0.6
-    local STUCK_DISTANCE_THRESHOLD = 1.0
-    local stuckStrikes = 0
-    local MAX_STUCK_STRIKES = 3 -- udah dicoba lepasin diri 3x tapi tetep gak gerak = nyerah di titik ini
+    for radius = 10, 160, 10 do
+        for k = 0, 15 do
+            local a = k * math.pi / 8
+            local sample = origin + Vector3.new(math.cos(a) * radius, 0, math.sin(a) * radius)
+            local hit = workspace:Raycast(sample + Vector3.new(0, 300, 0), Vector3.new(0, -500, 0), params)
 
-    -- Maneuver "lepas diri" kalau nempel tembok lurus: mundur dulu (S) biar gak
-    -- nempel lagi, baru strafe tegas ke samping (A/D), baru lanjut coba maju lagi.
-    -- Jauh lebih efektif daripada cuma nyerong 35 derajat doang buat tembok lebar/lurus.
-    local function performUnstuckManeuver(strikeCount)
-        releaseAllMoveKeys()
-
-        -- Strike pertama: coba yang paling murah dulu, lompat di tempat
-        if strikeCount <= 1 then
-            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
-            task.wait(0.15)
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
-            task.wait(0.2)
-            return
-        end
-
-        -- Strike ke-2+: mundur dulu biar lepas dari tembok
-        setKeyHeld(Enum.KeyCode.S, true)
-        task.wait(0.5)
-        setKeyHeld(Enum.KeyCode.S, false)
-
-        -- Strafe tegas ke sisi yang lebih kosong (cek whisker kiri/kanan sekali lagi)
-        local origin = RootPart.Position
-        local flatDir = Vector3.new(targetPos.X - origin.X, 0, targetPos.Z - origin.Z)
-        local strafeKey = Enum.KeyCode.D -- default
-
-        if flatDir.Magnitude > 0.1 then
-            flatDir = flatDir.Unit
-            local params = RaycastParams.new()
-            params.FilterType = Enum.RaycastFilterType.Exclude
-            params.FilterDescendantsInstances = {Character}
-
-            local rayOrigin = origin + Vector3.new(0, 1, 0)
-            local leftDir = CFrame.Angles(0, math.rad(90), 0) * flatDir
-            local rightDir = CFrame.Angles(0, -math.rad(90), 0) * flatDir
-
-            local leftResult = workspace:Raycast(rayOrigin, leftDir * 5, params)
-            local rightResult = workspace:Raycast(rayOrigin, rightDir * 5, params)
-
-            if leftResult and not rightResult then
-                strafeKey = Enum.KeyCode.D
-            elseif rightResult and not leftResult then
-                strafeKey = Enum.KeyCode.A
-            else
-                strafeKey = (strikeCount % 2 == 0) and Enum.KeyCode.D or Enum.KeyCode.A
+            if hit and hit.Position.Y > Nav.MinGroundY and hit.Normal.Y > 0.6 then
+                tried = tried + 1
+                local wps, path = Nav.computePath(origin, hit.Position + Vector3.new(0, 3, 0), 1)
+                if wps then return hit.Position, wps, path end
+                if tried >= Nav.MaxExitPaths then return nil end
             end
         end
+    end
+    return nil
+end
 
-        setKeyHeld(strafeKey, true)
-        task.wait(0.6)
-        setKeyHeld(strafeKey, false)
+function Nav.escapeRoof()
+    StatusExtra = "keluar dari atap"
+    updateGuiState()
 
-        -- Lompat sekali lagi buat jaga-jaga ada ledge/step kecil
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
-        task.wait(0.15)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
-        task.wait(0.2)
+    local exitPos, wps, path = Nav.findExit()
+    if not exitPos then
+        print("[AutoEventDoor] Gak nemu jalan keluar dari bawah atap.")
+        StatusExtra = ""
+        updateGuiState()
+        return false
     end
 
-    local reached = false
+    local function done()
+        local d = RootPart.Position - exitPos
+        return Vector3.new(d.X, 0, d.Z).Magnitude <= Nav.PointArrive
+    end
 
-    while Enabled and (tick() - startTime) < timeout do
-        local dist = (RootPart.Position - targetPos).Magnitude
-        if dist <= WAYPOINT_REACH_DISTANCE then
-            reached = true
-            break
+    local state = { blocked = false }
+    local conn = path and path.Blocked:Connect(function() state.blocked = true end)
+    local status = Nav.follow(Nav.filter(wps), done, state)
+    if conn then conn:Disconnect() end
+
+    StatusExtra = ""
+    updateGuiState()
+    return status == "Arrived" or status == "Finished"
+end
+
+-- ---------- orkestrator ----------
+-- Return: "Arrived" | "Blocked" | "Stuck" | "Stopped"
+function Nav.goTo(goalPos, isDone, preWps, prePath)
+    for attempt = 1, Nav.MaxAttempts do
+        if not Enabled then return "Stopped" end
+        if isDone() then return "Arrived" end
+
+        local waypoints, path
+        if attempt == 1 and preWps then
+            waypoints, path = preWps, prePath
+        else
+            waypoints, path = Nav.computePath(RootPart.Position, goalPos)
         end
 
-        -- STUN: lepas semua tombol, tunggu stun habis, jangan hitung sebagai stuck
-        if isStunned() then
-            releaseAllMoveKeys()
-            local stunStart = tick()
-            waitUntilNotStunned()
-            startTime = startTime + (tick() - stunStart)
-            lastPos = RootPart.Position
-            lastMoveCheck = tick()
-            stuckStrikes = 0
-            continue
-        end
-
-        RunService.Heartbeat:Wait()
-
-        updateMoveKeysTowards(targetPos)
-        IndicatorBeam.targetPart.Position = targetPos
-
-        if tick() - lastMoveCheck >= STUCK_CHECK_INTERVAL then
-            local moved = (RootPart.Position - lastPos).Magnitude
-            if moved < STUCK_DISTANCE_THRESHOLD then
-                stuckStrikes = stuckStrikes + 1
-
-                if stuckStrikes >= MAX_STUCK_STRIKES then
-                    -- Beneran stuck (ketahan tembok/geometri), nyerah di waypoint ini
-                    -- biar caller bisa recompute path dari posisi sekarang
-                    releaseAllMoveKeys()
-                    hideDirectionIndicator()
-                    return false
-                end
-
-                performUnstuckManeuver(stuckStrikes)
-            else
-                stuckStrikes = 0
+        if not waypoints then
+            -- Gak ada path: kalau lagi ketutup atap, keluar dulu lalu coba lagi
+            if Nav.isCovered(RootPart.Position) and Nav.escapeRoof() then
+                continue
             end
-            lastPos = RootPart.Position
-            lastMoveCheck = tick()
+            return "Blocked"
         end
+
+        local state = { blocked = false }
+        local conn = path and path.Blocked:Connect(function() state.blocked = true end)
+        local status = Nav.follow(Nav.filter(waypoints), isDone, state)
+        if conn then conn:Disconnect() end
+
+        if status == "Arrived" or status == "Stopped" then return status end
+
+        if status == "Finished" then
+            local d = RootPart.Position - goalPos
+            if Vector3.new(d.X, 0, d.Z).Magnitude <= Nav.PointArrive + 2 then
+                return "Arrived"
+            end
+        end
+        -- "Stuck" / "Blocked" / "Finished" tapi belum dekat: loop = hitung ulang dari posisi sekarang
     end
 
-    releaseAllMoveKeys()
-    hideDirectionIndicator()
+    return isDone() and "Arrived" or "Stuck"
+end
+
+-- ============ API publik (nama sama kayak sebelumnya) ============
+
+-- Tween lurus ke satu titik (dipakai fallback Witch). targetPos = titik LANTAI.
+local function tweenToPoint(targetPos, timeout)
+    local reached = Nav.tweenAlong({targetPos}, timeout or 8)
     return reached
 end
 
--- Compute path dengan beberapa fallback AgentRadius, kalau radius pertama gagal
-local AGENT_RADIUS_FALLBACKS = {2, 1.5, 3, 1}
+-- target: eventDoor (Model/Part) atau Part tujuan biasa (ShopTarget / MerchantTarget).
+-- Return: true kalau sampai
+local function walkToDoorHeld(target)
+    local center = getDoorPosition(target)
+    if not center then return false end
 
-local function computePathWaypoints(fromPos, toPos)
-    for _, radius in ipairs(AGENT_RADIUS_FALLBACKS) do
-        local path = PathfindingService:CreatePath({
-            AgentRadius = radius,
-            AgentHeight = 5,
-            AgentCanJump = true,
-            AgentJumpHeight = 7,
-            AgentMaxSlope = 45,
-        })
+    local isDoor = (target.Name == EVENT_DOOR_CHILD_NAME)
+    local lost = false
 
-        local success = pcall(function()
-            path:ComputeAsync(fromPos, toPos)
-        end)
+    local function isDone()
+        if not target.Parent then lost = true return true end
+        local c = getDoorPosition(target)
+        if not c then lost = true return true end
 
-        if success and path.Status == Enum.PathStatus.Success then
-            return path:GetWaypoints()
+        if isDoor then
+            -- cukup dekat (3D) & kelihatan, atau udah nempel banget secara datar
+            local d = (RootPart.Position - c).Magnitude
+            if d <= MINE_DISTANCE and Nav.canSee(target, c) then return true end
+            local dd = RootPart.Position - c
+            return Vector3.new(dd.X, 0, dd.Z).Magnitude <= Nav.PointArrive
         end
+
+        local dd = RootPart.Position - c
+        return Vector3.new(dd.X, 0, dd.Z).Magnitude <= Nav.PointArrive and math.abs(dd.Y) <= 10
     end
 
-    -- Semua fallback gagal, pakai garis lurus sebagai usaha terakhir
-    return { { Position = toPos } }
-end
+    if isDone() then return not lost end
 
--- Filter waypoint yang terlalu rapat (zigzag kecil bikin arah berubah drastis)
--- PENTING: filter ini gak boleh cuma liat JARAK doang. Waypoint yang nandain
--- BELOKAN TAJAM (misal mau masuk pintu dari sisi tertentu) harus tetep
--- dipertahankan meskipun jaraknya deket, soalnya kalau di-skip, karakter bakal
--- jalan lurus ke waypoint berikutnya yang lebih jauh dan malah lewat jalur yang
--- salah / nembus/ngelilingin bangunan dari sisi yang keliru.
-local function filterWaypoints(waypoints, fromPos)
-    local MIN_WAYPOINT_GAP = 10
-    local TURN_ANGLE_THRESHOLD = 35 -- derajat - belokan setajam ini WAJIB dipertahankan
-
-    local filtered = {}
-    local lastPos = fromPos
-    local lastDir = nil -- arah dari waypoint kept sebelumnya ke lastPos
-
-    for i, wp in ipairs(waypoints) do
-        local isLast = (i == #waypoints)
-        local gap = (wp.Position - lastPos).Magnitude
-
-        local isSharpTurn = false
-        if lastDir and gap > 0.1 then
-            local newDir = (wp.Position - lastPos).Unit
-            local dot = math.clamp(lastDir:Dot(newDir), -1, 1)
-            local angle = math.deg(math.acos(dot))
-            if angle >= TURN_ANGLE_THRESHOLD then
-                isSharpTurn = true
-            end
-        end
-
-        if isLast or gap >= MIN_WAYPOINT_GAP or isSharpTurn or wp.Action == Enum.PathWaypointAction.Jump then
-            if gap > 0.1 then
-                lastDir = (wp.Position - lastPos).Unit
-            end
-            table.insert(filtered, wp)
-            lastPos = wp.Position
-        end
+    -- Pilih titik tujuan
+    local goal, wps, path
+    if isDoor then
+        goal, wps, path = Nav.pickGoal(Nav.doorGoals(target))
+    end
+    if not goal then
+        goal = center
     end
 
-    return filtered
-end
-
-local MAX_PATH_ATTEMPTS = 3 -- recompute path dari posisi sekarang sampai sekian kali sebelum nyerah di door ini
-
-local function walkToDoorHeld(door)
-    local pos = getDoorPosition(door)
-    if not pos then return false end
-
-    if (RootPart.Position - pos).Magnitude <= MINE_DISTANCE then
-        return true
+    local status = Nav.goTo(goal, isDone, wps, path)
+    if lost then
+        releaseAllMoveKeys()
+        return false
     end
 
-    for attempt = 1, MAX_PATH_ATTEMPTS do
-        if not Enabled or not door.Parent then
-            releaseAllMoveKeys()
-            return false
-        end
-
-        local currentDoorPos = getDoorPosition(door)
-        if not currentDoorPos then return false end
-
-        if (RootPart.Position - currentDoorPos).Magnitude <= MINE_DISTANCE then
-            return true
-        end
-
-        local waypoints = computePathWaypoints(RootPart.Position, currentDoorPos)
-        local filteredWaypoints = filterWaypoints(waypoints, RootPart.Position)
-
-        local gotStuck = false
-
-        for _, wp in ipairs(filteredWaypoints) do
-            if not Enabled then
-                releaseAllMoveKeys()
-                return false
-            end
-            if not door.Parent then
-                releaseAllMoveKeys()
-                return false
-            end
-
-            local checkDoorPos = getDoorPosition(door)
-            if checkDoorPos and (RootPart.Position - checkDoorPos).Magnitude <= MINE_DISTANCE then
-                releaseAllMoveKeys()
-                return true
-            end
-
-            local reached = walkToPointHeld(wp.Position, 8)
-            if not reached then
-                gotStuck = true
-                break -- waypoint ini gagal, keluar & recompute path dari posisi sekarang
-            end
-        end
-
-        if not gotStuck then
-            -- Semua waypoint di-pass tanpa stuck, cek posisi akhir
-            local finalDoorPos = getDoorPosition(door)
-            if finalDoorPos and (RootPart.Position - finalDoorPos).Magnitude <= MINE_DISTANCE then
-                return true
-            end
-            -- Udah nyampe ujung waypoint tapi belum cukup deket (jarang terjadi) - coba lagi
-        end
-    end
-
-    -- Udah dicoba berkali-kali tetep gagal, nyerah di door ini
     releaseAllMoveKeys()
-    return false
+    return status == "Arrived"
 end
 
 -- ============ Trip ke Witch of Halloween buat beli chest ============
@@ -2137,7 +2046,7 @@ end
 -- kepala NPC / bisa jauh dari lantai, jadi sering "gak beneran sampai". Sekarang:
 --   1) cari badan NPC, ambil titik ~4 stud di depannya (arah karakter), turun ke LANTAI
 --   2) jalan lewat pathfinding
---   3) kalau belum pas (jarak datar > SHOP_ARRIVE_FLAT), tween lurus + noclip, max 3x
+--   3) kalau belum pas (jarak datar > SHOP_ARRIVE_FLAT), tween lurus, max 3x
 --   4) kalau tetap belum pas, batalin pembelian (return false -> backoff, script tetap jalan)
 local SHOP_ARRIVE_FLAT = 6
 local ShopRetryAt = 0 -- kalau trip gagal, jangan dicoba lagi sebelum waktu ini (tick)
@@ -2201,15 +2110,15 @@ local function arriveAtWitch()
     if not Enabled then return false end
     if closeEnough() then return true end
 
-    -- 2) Fallback: tween lurus + noclip, hitung ulang posisi NPC tiap percobaan
+    -- 2) Fallback: tween lurus (nempel lantai), hitung ulang posisi NPC tiap percobaan
     for attempt = 1, 3 do
         if not Enabled then return false end
 
         ground = getWitchStandPosition() or ground
         ShopTarget.Position = ground
 
-        print("[AutoEventDoor] Belum pas sampai di Witch, tween langsung + noclip (percobaan " .. attempt .. "/3).")
-        tweenToPoint(ground, 30, true)
+        print("[AutoEventDoor] Belum pas sampai di Witch, tween langsung (percobaan " .. attempt .. "/3).")
+        tweenToPoint(ground, 30)
         if closeEnough() then return true end
     end
 
