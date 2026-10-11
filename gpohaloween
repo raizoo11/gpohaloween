@@ -24,6 +24,9 @@
       -> ulang sampai chest sisa 1, lalu balik farm door (0 di GUI = fitur mati)
     - Auto Merchant: kalau Traveling Merchant lagi muncul, jalan ke sana & beli item pilihan
       (1x per stok; stok baru = merchant hilang lalu muncul lagi)
+    - Auto Join Private Server (First Sea): kalau script dijalankan di MAIN MENU,
+      otomatis kirim kode private server -> pilih Regular -> konfirmasi "First Sea".
+      Kode & toggle diatur di GUI (disimpan ke file biar kebaca di main menu)
     - Toggle ON/OFF dengan tombol "," (Comma) atau lewat GUI
 ]]
 
@@ -36,6 +39,191 @@ local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LocalPlayer = Players.LocalPlayer
+
+-- ================= Auto Join Private Server (First Sea) =================
+-- Alur (sama kayak hub), dijalankan di MAIN MENU (PlaceId 1730877806):
+--   1) ReplicatedStorage.Events.reserved:InvokeServer(<kode private server>)
+--   2) klik  PlayerGui.chooseType.Frame.Options.Regular
+--   3) klik  PlayerGui.ConfirmationPrompt.Main.OptionsFrame["First Sea"]
+-- Diulang tiap RetryInterval detik sampai teleport kejadian.
+-- Kode = bagian kode saja dari link private server (bukan link lengkap).
+-- Setelan (toggle + kode) diatur dari GUI, disimpan ke file ConfigFile supaya
+-- kebaca juga pas script jalan di main menu. Bisa juga lewat getgenv():
+--   getgenv().AutoJoinPrivateServer = true ; getgenv().PrivateServerCode = "kode"
+-- NOTE: setelah teleport script harus jalan lagi di First Sea. Paling gampang pakai
+-- folder autoexec executor-mu, atau isi ReexecuteUrl (butuh queue_on_teleport).
+-- Semua dibungkus 1 table biar gak nambah banyak variabel local (batas Luau 200).
+local PrivateServer = {
+    MainMenuPlaceId = 1730877806,
+    FirstSeaPlaceId = 3978370137,
+    ConfigFile = "AutoEventDoor_PrivateServer.json",
+    RetryInterval = 8,   -- detik antar percobaan join
+    ReexecuteUrl = "",   -- opsional: URL raw script ini, buat di-queue_on_teleport
+    Enabled = true,
+    Code = "A6oWXv8rPV",
+}
+
+function PrivateServer.load()
+    pcall(function()
+        if typeof(isfile) == "function" and typeof(readfile) == "function"
+            and isfile(PrivateServer.ConfigFile) then
+            local data = game:GetService("HttpService"):JSONDecode(readfile(PrivateServer.ConfigFile))
+            if type(data) == "table" then
+                if type(data.Enabled) == "boolean" then PrivateServer.Enabled = data.Enabled end
+                if type(data.Code) == "string" then PrivateServer.Code = data.Code end
+            end
+        end
+    end)
+
+    -- Override lewat getgenv (nama sama kayak di hub)
+    pcall(function()
+        local genv = getgenv()
+        if genv.AutoJoinPrivateServer ~= nil then
+            PrivateServer.Enabled = genv.AutoJoinPrivateServer == true
+        end
+        if type(genv.PrivateServerCode) == "string" and genv.PrivateServerCode ~= "" then
+            PrivateServer.Code = genv.PrivateServerCode
+        end
+    end)
+
+    PrivateServer.Code = tostring(PrivateServer.Code or ""):match("^%s*(.-)%s*$") or ""
+end
+
+function PrivateServer.save()
+    pcall(function()
+        local genv = getgenv()
+        genv.AutoJoinPrivateServer = PrivateServer.Enabled
+        genv.PrivateServerCode = PrivateServer.Code
+    end)
+    pcall(function()
+        if typeof(writefile) == "function" then
+            writefile(PrivateServer.ConfigFile, game:GetService("HttpService"):JSONEncode({
+                Enabled = PrivateServer.Enabled,
+                Code = PrivateServer.Code,
+            }))
+        end
+    end)
+end
+
+-- Tunggu child bertingkat, mis. {"chooseType","Frame","Options","Regular"}
+function PrivateServer.waitPath(root, names, timeout)
+    local node = root
+    for _, name in ipairs(names) do
+        node = node and node:WaitForChild(name, timeout)
+    end
+    return node
+end
+
+-- Tekan tombol GUI: fire koneksi event (paling andal), fallback firesignal,
+-- terakhir klik mouse beneran di tengah tombol.
+function PrivateServer.press(btn)
+    if typeof(getconnections) == "function" then
+        for _, signalName in ipairs({"MouseButton1Click", "Activated"}) do
+            local fired = false
+            local ok, conns = pcall(getconnections, btn[signalName])
+            if ok and type(conns) == "table" then
+                for _, conn in ipairs(conns) do
+                    if pcall(function() conn:Fire() end) then fired = true end
+                end
+            end
+            if fired then return true end
+        end
+    end
+
+    if typeof(firesignal) == "function" and pcall(firesignal, btn.MouseButton1Click) then
+        return true
+    end
+
+    pcall(function()
+        local pos, size = btn.AbsolutePosition, btn.AbsoluteSize
+        local inset = game:GetService("GuiService"):GetGuiInset()
+        local x, y = pos.X + size.X / 2, pos.Y + size.Y / 2 + inset.Y
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+        task.wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    end)
+    return true
+end
+
+-- Satu kali percobaan join. Return: true kalau semua tombol berhasil ditekan
+function PrivateServer.joinOnce()
+    local code = PrivateServer.Code
+
+    -- 1) kirim kode private server (di thread terpisah, InvokeServer bisa nunggu)
+    task.spawn(function()
+        pcall(function()
+            local events = ReplicatedStorage:WaitForChild("Events", 10)
+            local reserved = events and events:WaitForChild("reserved", 10)
+            if reserved then
+                reserved:InvokeServer(code)
+            end
+        end)
+    end)
+    task.wait(2)
+
+    local playerGui = LocalPlayer:WaitForChild("PlayerGui", 10)
+    if not playerGui then return false end
+
+    -- 2) pilih "Regular"
+    local regular = PrivateServer.waitPath(playerGui, {"chooseType", "Frame", "Options", "Regular"}, 10)
+    if not regular then
+        print("[AutoEventDoor] chooseType...Regular gak ketemu di main menu.")
+        return false
+    end
+    PrivateServer.press(regular)
+    task.wait(2)
+
+    -- 3) konfirmasi "First Sea"
+    local firstSea = PrivateServer.waitPath(playerGui, {"ConfirmationPrompt", "Main", "OptionsFrame", "First Sea"}, 10)
+    if not firstSea then
+        print("[AutoEventDoor] ConfirmationPrompt...'First Sea' gak ketemu.")
+        return false
+    end
+    PrivateServer.press(firstSea)
+    return true
+end
+
+function PrivateServer.runMenuLoop()
+    pcall(function()
+        local genv = getgenv()
+        if genv.PrivateJoinLoopRunning then return end
+        genv.PrivateJoinLoopRunning = true
+    end)
+
+    task.spawn(function()
+        while game.PlaceId == PrivateServer.MainMenuPlaceId
+            and PrivateServer.Enabled and PrivateServer.Code ~= "" do
+            local ok, result = pcall(PrivateServer.joinOnce)
+            if not ok then
+                print("[AutoEventDoor] Join private server error: " .. tostring(result))
+            end
+            task.wait(PrivateServer.RetryInterval)
+        end
+        pcall(function() getgenv().PrivateJoinLoopRunning = false end)
+    end)
+end
+
+PrivateServer.load()
+
+-- Di MAIN MENU: cuma ngurusin join private server, script farm gak dijalankan di sini
+-- (di menu belum ada dunia game / event door).
+if game.PlaceId == PrivateServer.MainMenuPlaceId then
+    if PrivateServer.Enabled and PrivateServer.Code ~= "" then
+        print("[AutoEventDoor] Main menu: auto join private server (First Sea)...")
+
+        local queueFn = queue_on_teleport or queueonteleport
+        if PrivateServer.ReexecuteUrl ~= "" and typeof(queueFn) == "function" then
+            pcall(queueFn, string.format("loadstring(game:HttpGet(%q))()", PrivateServer.ReexecuteUrl))
+        end
+
+        PrivateServer.runMenuLoop()
+    else
+        print("[AutoEventDoor] Main menu: Auto Join Private Server OFF atau kode kosong. " ..
+            "Nyalain & isi kode dulu dari GUI pas lagi di dalam game (disimpan ke file).")
+    end
+    return
+end
+
 local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local Humanoid = Character:WaitForChild("Humanoid")
 local RootPart = Character:WaitForChild("HumanoidRootPart")
@@ -116,6 +304,20 @@ local Settings = {
 
 local BUILDING_PATH = {"Islands", "Spooksville", "Building"}
 local EVENT_DOOR_CHILD_NAME = "eventDoor"
+
+-- Door yang DI-IGNORE (gak pernah dikunjungi & gak dihitung di progress), dipilih
+-- lewat nomor urut di workspace.Islands.Spooksville.Building:GetChildren().
+-- [59] = workspace.Islands.Spooksville.Building:GetChildren()[59].eventDoor
+-- Tambah nomor lain dengan format [nomor] = true.
+-- NOTE: urutan GetChildren() bisa beda antar server. Kalau yang ke-skip ternyata
+-- bukan door yang dimaksud, pakai IGNORED_DOOR_NAMES (nama child di Building).
+local IGNORED_DOOR_INDEXES = {
+    [59] = true,
+}
+local IGNORED_DOOR_NAMES = {
+    -- ["NamaChildBuilding"] = true,
+}
+local IgnoredDoorPrinted = {}
 local TOGGLE_KEY = Enum.KeyCode.Comma
 local MINE_DISTANCE = 8
 local WAYPOINT_REACH_DISTANCE = 6
@@ -344,7 +546,7 @@ end
 
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 240, 0, 522)
+MainFrame.Size = UDim2.new(0, 240, 0, 590)
 MainFrame.Position = UDim2.new(0, 20, 0.5, -180)
 MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
 MainFrame.BorderSizePixel = 0
@@ -667,9 +869,50 @@ Instance.new("UICorner", MerchantItemsBox).CornerRadius = UDim.new(0, 6)
 
 local ChestTriggerBox = createSettingRow("Buka Chest di:", 416, Settings.ChestOpenAt)
 
+-- Auto Join Private Server (First Sea): kode + toggle. Disimpan ke file lewat
+-- PrivateServer.save() biar kebaca pas script jalan di main menu.
+PrivateServer.CodeBox = createSettingRow("Private Code:", 452, PrivateServer.Code)
+
+do
+    local PSLabel = Instance.new("TextLabel")
+    PSLabel.Size = UDim2.new(0.6, -10, 0, 26)
+    PSLabel.Position = UDim2.new(0, 10, 0, 484)
+    PSLabel.BackgroundTransparency = 1
+    PSLabel.Text = "Auto Join Private:"
+    PSLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+    PSLabel.Font = Enum.Font.Gotham
+    PSLabel.TextSize = 12
+    PSLabel.TextXAlignment = Enum.TextXAlignment.Left
+    PSLabel.Parent = MainFrame
+
+    local PSToggle = Instance.new("TextButton")
+    PSToggle.Size = UDim2.new(0.4, -10, 0, 26)
+    PSToggle.Position = UDim2.new(0.6, 0, 0, 484)
+    PSToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    PSToggle.Font = Enum.Font.GothamBold
+    PSToggle.TextSize = 12
+    PSToggle.BorderSizePixel = 0
+    PSToggle.Parent = MainFrame
+    Instance.new("UICorner", PSToggle).CornerRadius = UDim.new(0, 6)
+
+    function PrivateServer.updateToggle()
+        PSToggle.Text = PrivateServer.Enabled and "ON" or "OFF"
+        PSToggle.BackgroundColor3 = PrivateServer.Enabled and Color3.fromRGB(50, 160, 80) or Color3.fromRGB(180, 50, 50)
+    end
+
+    PSToggle.MouseButton1Click:Connect(function()
+        PrivateServer.Enabled = not PrivateServer.Enabled
+        PrivateServer.Code = PrivateServer.CodeBox.Text:match("^%s*(.-)%s*$") or ""
+        PrivateServer.save()
+        PrivateServer.updateToggle()
+    end)
+
+    PrivateServer.updateToggle()
+end
+
 local ApplyButton = Instance.new("TextButton")
 ApplyButton.Size = UDim2.new(1, -20, 0, 26)
-ApplyButton.Position = UDim2.new(0, 10, 0, 452)
+ApplyButton.Position = UDim2.new(0, 10, 0, 520)
 ApplyButton.BackgroundColor3 = Color3.fromRGB(60, 100, 170)
 ApplyButton.Text = "Apply Settings"
 ApplyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -732,6 +975,10 @@ local function applySettings()
     local cr = tonumber(ChestTriggerBox.Text)
     Settings.MerchantItems = MerchantItemsBox.Text
 
+    -- Kode private server: simpan ke file/getgenv biar kebaca di main menu
+    PrivateServer.Code = PrivateServer.CodeBox.Text:match("^%s*(.-)%s*$") or ""
+    PrivateServer.save()
+
     if cr and cr >= 0 then Settings.ChestOpenAt = math.floor(cr) end
 
     if ts and ts > 0 then Settings.TweenSpeed = ts end
@@ -753,6 +1000,7 @@ local function applySettings()
     CandyTargetBox.Text = tostring(Settings.CandyTarget)
     CooldownBox.Text = tostring(Settings.DoorCooldown)
     ChestTriggerBox.Text = tostring(Settings.ChestOpenAt)
+    PrivateServer.CodeBox.Text = PrivateServer.Code
 
     updateGuiState()
 end
@@ -778,6 +1026,9 @@ CooldownBox.FocusLost:Connect(function(enterPressed)
 end)
 ChestTriggerBox.FocusLost:Connect(function(enterPressed)
     if enterPressed then applySettings() end
+end)
+PrivateServer.CodeBox.FocusLost:Connect(function()
+    applySettings() -- kode biasanya di-paste lalu klik di luar, jadi simpan tiap kali fokus lepas
 end)
 MerchantItemsBox.FocusLost:Connect(function()
     Settings.MerchantItems = MerchantItemsBox.Text
@@ -815,10 +1066,18 @@ local function getAllEventDoors()
     if not building then return {} end
 
     local doors = {}
-    for _, child in ipairs(building:GetChildren()) do
+    for index, child in ipairs(building:GetChildren()) do
         local door = child:FindFirstChild(EVENT_DOOR_CHILD_NAME)
         if door then
-            table.insert(doors, door)
+            if IGNORED_DOOR_INDEXES[index] or IGNORED_DOOR_NAMES[child.Name] then
+                -- Door di-ignore: print sekali biar kelihatan yang mana yang ke-skip
+                if not IgnoredDoorPrinted[child] then
+                    IgnoredDoorPrinted[child] = true
+                    print("[AutoEventDoor] Ignore door #" .. index .. " (" .. child:GetFullName() .. ")")
+                end
+            else
+                table.insert(doors, door)
+            end
         end
     end
 
