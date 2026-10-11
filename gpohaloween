@@ -20,10 +20,12 @@
     - Kalau candy >= Candy Target: jalan ke Witch of Halloween, beli Rare Fruit Chest,
       lalu balik ngumpulin candy
     - Auto Buka Chest: kalau Rare Fruit Chest >= "Buka Chest di" (default 7), loop:
-      equip chest -> klik layar -> ConfirmationPrompt muncul -> klik Accept -> tunggu 8s
-      -> ulang sampai chest sisa 1, lalu balik farm door (0 di GUI = fitur mati)
+      equip chest -> klik layar -> ConfirmationPrompt muncul -> klik Accept -> tunggu 9s
+      -> ulang sampai chest tinggal 2 (CHEST_KEEP), lalu balik farm door
+      (0 di GUI = fitur mati)
     - Auto Merchant: kalau Traveling Merchant lagi muncul, jalan ke sana & beli item pilihan
-      (1x per stok; stok baru = merchant hilang lalu muncul lagi)
+      lewat Events.TravelingMerchentRemote (1x per stok; stok baru = merchant hilang
+      lalu muncul lagi)
     - Auto Join Private Server (First Sea): kalau script dijalankan di MAIN MENU,
       otomatis kirim kode private server -> pilih Regular -> konfirmasi "First Sea".
       Kode & toggle diatur di GUI (disimpan ke file biar kebaca di main menu)
@@ -296,7 +298,7 @@ local Settings = {
     TweenSpeed = 60,    -- stud/detik
     CandyTarget = 500,  -- kalau candy >= ini, pergi ke Witch buat beli chest
     DoorCooldown = 180, -- detik, cooldown per door setelah dikunjungi (3 menit)
-    ChestOpenAt = 7, -- kalau Rare Fruit Chest >= ini, buka chest berulang sampai sisa 1 (0 = mati)
+    ChestOpenAt = 7, -- kalau Rare Fruit Chest >= ini, buka chest berulang sampai sisa CHEST_KEEP (2) (0 = mati)
     AutoMerchant = false, -- jalan ke Traveling Merchant & beli item pilihan
     MerchantItems = "",   -- nama item, dipisah koma
     GeppoPass = false,  -- spam skill Geppo/Sky Walk selama tween (kayak di source)
@@ -2278,16 +2280,26 @@ end
 -- restock tiap 30 menit; 1 stok cukup dibeli sekali, jadi setelah beli kita
 -- tandai MerchantBought dan baru reset pas marker-nya hilang (stok berikutnya).
 
--- >>> ISI BAGIAN INI <<<
--- Source yang kamu kasih TIDAK memuat kode beli-nya (cuma deteksi + jalan + daftar
--- item), jadi cara belinya harus diisi dari remote asli. Caranya sama kayak snippet
--- Witch tadi: buka shop merchant, beli 1 item, salin remote yang tertangkap, lalu
--- tempel di sini. itemName = nama item yang kamu tulis di GUI.
-local MERCHANT_BUY_CONFIGURED = false
+-- Beli item: Events.TravelingMerchentRemote:InvokeServer(itemName, <angka>, <GUID>)
+-- (ejaan "Merchent" memang begitu di game). Angka & GUID dari contoh remote-mu;
+-- nilainya sama di dua item berbeda, jadi bukan per-item, kemungkinan per-stok
+-- merchant (berubah tiap restock). Kalau pembelian mulai ditolak setelah merchant
+-- restock, ambil nilai baru dari remote spy dan ganti di dalam fungsi di bawah.
+-- (Konstantanya sengaja di DALAM fungsi, biar gak nambah variabel local di level
+-- atas script - batas Luau 200 local per scope.)
+local MERCHANT_BUY_CONFIGURED = true
 local function buyMerchantItem(itemName)
-    -- contoh bentuknya (ganti sesuai remote asli):
-    -- ReplicatedStorage:WaitForChild("<NamaRemote>"):InvokeServer(itemName)
-    error("buyMerchantItem belum diisi")
+    local STOCK_ID = 1613697448
+    local STOCK_GUID = "6a75e173-f8a5-4d9e-b989-25536ecbd53c"
+
+    local events = ReplicatedStorage:WaitForChild("Events", 5)
+    local remote = events and events:WaitForChild("TravelingMerchentRemote", 5)
+    if not remote then
+        error("Events.TravelingMerchentRemote gak ketemu")
+    end
+
+    -- Return: balasan server (dicetak di console buat diagnosa)
+    return remote:InvokeServer(itemName, STOCK_ID, STOCK_GUID)
 end
 
 local MerchantBought = false   -- stok yang lagi keluar sudah dibeli
@@ -2358,11 +2370,13 @@ local function doMerchantTrip(marker)
     local bought = 0
     for _, itemName in ipairs(items) do
         if not Enabled then break end
-        local ok, err = pcall(buyMerchantItem, itemName)
-        if ok then
+
+        local ok, res = pcall(buyMerchantItem, itemName)
+        if ok and res ~= false then
             bought = bought + 1
-            print("[AutoEventDoor] Beli dari merchant: " .. itemName)
+            print("[AutoEventDoor] Beli dari merchant: " .. itemName .. " (balasan server: " .. tostring(res) .. ")")
         else
+            local err = ok and ("ditolak server: " .. tostring(res)) or res
             print("[AutoEventDoor] Gagal beli " .. itemName .. ": " .. tostring(err))
         end
         task.wait(0.5)
@@ -2462,10 +2476,10 @@ end
 --   2) klik layar (tengah screen)
 --   3) tunggu PlayerGui.ConfirmationPrompt muncul, lalu klik
 --      ConfirmationPrompt.Main.OptionsFrame.Accept (ImageButton)
---   4) tunggu 8 detik, cek jumlah chest
--- sampai chest tinggal 1, lalu balik farm door. (Basket otomatis di-equip lagi
--- di iterasi mainLoop berikutnya.)
-local CHEST_KEEP = 1                -- chest yang disisakan (berhenti buka kalau jumlah <= ini)
+--   4) tunggu 9 detik, cek jumlah chest
+-- sampai chest tinggal CHEST_KEEP (2), lalu balik farm door. (Basket otomatis
+-- di-equip lagi di iterasi mainLoop berikutnya.)
+local CHEST_KEEP = 2                -- chest yang disisakan (berhenti buka kalau jumlah <= ini)
 local OPEN_WAIT_AFTER_ACCEPT = 9
 local PROMPT_WAIT = 4               -- tunggu prompt muncul setelah klik layar
 local OPEN_MAX_CYCLES = 60          -- pengaman biar gak infinite loop
@@ -2635,7 +2649,7 @@ local function waitWhileEnabled(seconds, label)
     end
 end
 
--- Return: true kalau chest berhasil turun sampai <= 1
+-- Return: true kalau chest berhasil turun sampai <= CHEST_KEEP
 local function doChestOpen()
     local last = getChestCount()
     local noProgress = 0
@@ -2776,9 +2790,11 @@ local function mainLoop()
             end
         end
 
-        -- Rare Fruit Chest numpuk (>= trigger): buka sampai sisa 1, lalu balik farm door/candy
+        -- Rare Fruit Chest numpuk (>= trigger): buka sampai tinggal CHEST_KEEP, lalu balik farm door/candy.
+        -- math.max: kalau "Buka Chest di" diisi <= CHEST_KEEP, trigger tetap minimal CHEST_KEEP + 1
+        -- (kalau tidak, doChestOpen langsung selesai tanpa buka apa-apa tapi farm door ke-skip terus).
         if not tripped and Settings.ChestOpenAt > 0 and tick() >= ChestRetryAt then
-            if getChestCount() >= Settings.ChestOpenAt then
+            if getChestCount() >= math.max(Settings.ChestOpenAt, CHEST_KEEP + 1) then
                 tripped = true
 
                 if not doChestOpen() and Enabled then
