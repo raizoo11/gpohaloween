@@ -4,7 +4,9 @@
     - Pathfinding jalan pakai HOLD W/A/S/D (shiftlock-style, kamera yang muter,
       badan ngikut), bukan Humanoid:MoveTo instan
     - Setelah sampai di eventDoor, trigger ProximityPrompt di
-      eventDoor.Frame.ProximityPrompt selama X detik (bisa diatur di GUI)
+      eventDoor.Frame.ProximityPrompt selama X detik (bisa diatur di GUI).
+      Urutan di door: tunggu sebentar -> Geppo 1x -> fire prompt
+      (Settings.DoorGeppo / DoorArriveWait / DoorGeppoDelay)
       (pakai fireproximityprompt kalau ada, fallback ke InputHoldBegin/End, lalu tombol E)
     - Deteksi STUN (LocalPlayer.StunFolder.Stun): dipakai buat nunggu animasi ambil
       candy / diculik selesai di antara aksi. TWEEN sendiri GAK di-pause kena stun/hit
@@ -302,6 +304,9 @@ local Settings = {
     AutoMerchant = false, -- jalan ke Traveling Merchant & beli item pilihan
     MerchantItems = "",   -- nama item, dipisah koma
     GeppoPass = false,  -- spam skill Geppo/Sky Walk selama tween (kayak di source)
+    DoorGeppo = true,       -- sampai di door: tunggu sebentar, Geppo 1x, baru fire prompt
+    DoorArriveWait = 0.5,   -- detik nunggu setelah sampai di door sebelum Geppo
+    DoorGeppoDelay = 0.3,   -- detik jeda setelah Geppo sebelum fire prompt
 }
 
 local BUILDING_PATH = {"Islands", "Spooksville", "Building"}
@@ -2858,6 +2863,17 @@ local function mainLoop()
 
                     if not interrupted and Enabled and door.Parent then
                         LastVisit[door] = tick() -- cooldown mulai dihitung dari sekarang
+
+                        -- Sampai di door: tunggu sebentar, Geppo SEKALI, baru fire prompt
+                        if Settings.DoorGeppo then
+                            task.wait(Settings.DoorArriveWait)
+                            -- Lagi stun pun tetap Geppo (gak nunggu stun habis)
+                            if Enabled and door.Parent then
+                                fireGeppoOnce() -- InvokeServer, otomatis nunggu server
+                                task.wait(Settings.DoorGeppoDelay)
+                            end
+                        end
+
                         triggerDoorPrompt(door, Settings.HoldDuration)
 
                         -- Animasi ambil candy / diculik = stun. Kasih waktu stun
