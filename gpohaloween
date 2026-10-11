@@ -2466,7 +2466,7 @@ end
 -- sampai chest tinggal 1, lalu balik farm door. (Basket otomatis di-equip lagi
 -- di iterasi mainLoop berikutnya.)
 local CHEST_KEEP = 1                -- chest yang disisakan (berhenti buka kalau jumlah <= ini)
-local OPEN_WAIT_AFTER_ACCEPT = 8
+local OPEN_WAIT_AFTER_ACCEPT = 9
 local PROMPT_WAIT = 4               -- tunggu prompt muncul setelah klik layar
 local OPEN_MAX_CYCLES = 60          -- pengaman biar gak infinite loop
 local OPEN_MAX_NOPROGRESS = 3       -- chest gak berkurang sekian siklus = nyerah
