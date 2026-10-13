@@ -33,8 +33,17 @@
       Kode & toggle diatur di GUI (disimpan ke file biar kebaca di main menu)
     - Discord Webhook: tiap ada item baru di Backpack/Character, kirim embed "Item Diperoleh!"
       ke webhook (URL + ON/OFF + tombol Test di GUI, disimpan ke file)
+    - Ringkasan webhook tiap 1 jam, KUMULATIF (jam ke-2 = total 2 jam, jam ke-3 = total 3 jam):
+      door, chest, merchant, item diperoleh, candy, durasi aktif; (+n) = tambahan jam terakhir
+    - Item langka (default: Goro, Magu, Pika, Ito, Zushi, Goru, Hie, Mochi, Venom, Pteranodon,
+      Tori, Dragon, Soul, Leopard, Brand Of Sacrifice, Nightfall Aura; bisa diubah di tab
+      Webhook) -> embed emas + ping @everyone
+    - Anti-diam: path gagal -> pindah ke ruang terbuka / lompat keluar dari kurungan; door gagal
+      beruntun -> lompat keluar (opsional respawn). Diagnosa PathStatus di console
+    - FPS Cap: batasi FPS ke 20 (setfpscap) & ditulis ulang tiap detik biar gak balik normal
     - Toggle ON/OFF dengan tombol "," (Comma) atau lewat GUI
     - GUI bertab (Farm / Gerak / Shop / Server); RightShift = sembunyikan/tampilkan GUI
+    - Status real-time: judul berwarna + detail (menuju door #N, jarak, ETA, cooldown, fire prompt, dll)
 ]]
 
 local Players = game:GetService("Players")
@@ -295,21 +304,25 @@ end
 -- ================= Settings (bisa diubah lewat GUI) =================
 local Settings = {
     SearchRadius = 50,
-    HoldDuration = 3,   -- durasi (detik) fire ProximityPrompt di tiap door
+    HoldDuration = 1,   -- durasi (detik) fire ProximityPrompt di tiap door
 
     WalkSpeed = 16,
     WalkSpeedEnabled = false,
     TweenMode = true,   -- true = gerak pakai tween (BodyVelocity), false = hold WASD
-    TweenSpeed = 60,    -- stud/detik
-    CandyTarget = 500,  -- kalau candy >= ini, pergi ke Witch buat beli chest
+    TweenSpeed = 40,    -- stud/detik
+    CandyTarget = 290,  -- kalau candy >= ini, pergi ke Witch buat beli chest
     DoorCooldown = 180, -- detik, cooldown per door setelah dikunjungi (3 menit)
     ChestOpenAt = 7, -- kalau Rare Fruit Chest >= ini, buka chest berulang sampai sisa CHEST_KEEP (2) (0 = mati)
     AutoMerchant = false, -- jalan ke Traveling Merchant & beli item pilihan
     MerchantItems = "",   -- nama item, dipisah koma
-    GeppoPass = false,  -- spam skill Geppo/Sky Walk selama tween (kayak di source)
+    GeppoPass = true,   -- spam skill Geppo/Sky Walk selama tween (kayak di source)
+    GeppoInterval = 0.5, -- detik jeda antar Geppo selama tween (0.1 kecepatan, 0.5 lebih natural)
     DoorGeppo = true,       -- sampai di door: tunggu sebentar, Geppo 1x, baru fire prompt
     DoorArriveWait = 0.5,   -- detik nunggu setelah sampai di door sebelum Geppo
     DoorGeppoDelay = 0.3,   -- detik jeda setelah Geppo sebelum fire prompt
+    FpsCapEnabled = true,   -- batasi FPS (setfpscap) & tulis ulang terus
+    FpsCap = 20,            -- batas FPS
+    StuckRespawn = false,   -- 6 door gagal berturut-turut -> reset karakter (mati & respawn) sebagai jalan terakhir
 }
 
 local BUILDING_PATH = {"Islands", "Spooksville", "Building"}
@@ -340,7 +353,6 @@ local LastKnownDoorCount = 0 -- total door yang ketemu terakhir kali di-scan, bu
 -- gak dicoba terus-terusan tanpa henti.
 local LastVisit = {}
 local COOLDOWN_BUFFER = 3 -- detik ekstra, jaga-jaga selisih waktu client vs server
-local StatusExtra = ""    -- teks tambahan di status (mis. hitung mundur cooldown)
 
 -- Kapan door ini siap dipakai lagi (waktu tick). 0 = belum pernah dikunjungi = siap
 local function getDoorReadyAt(door)
@@ -547,12 +559,26 @@ end
 -- dengan snapshot sebelumnya, yang NAMBAH dikirim ke Discord (beberapa item -> 1 pesan, max 10 embed).
 -- Dihitung dari total Backpack + Character, jadi equip/unequip tool (pindah container)
 -- TIDAK ikut kekirim. Respawn: snapshot di-reset diam-diam supaya gak ada notif palsu.
+-- Ringkasan: tiap 1 jam dikirim embed ringkasan (door, chest, merchant, item, candy, durasi aktif).
 -- URL + toggle diatur dari GUI & disimpan ke file. Bungkus 1 table biar hemat local.
 local Webhook = {
     ConfigFile = "AutoEventDoor_Webhook.json",
     Url = "",
     Enabled = true,
     Interval = 1.5,
+    Rare = "Goro, Magu, Pika, Ito, Zushi, Goru, Hie, Mochi, Venom, Pteranodon, Tori, Dragon, Soul, Leopard, Brand Of Sacrifice, Nightfall Aura",
+    -- ^ item/fruit langka -> ping @everyone. Pisah koma / baris baru; "1x Goro" juga boleh.
+    --   Cocok per KATA utuh & gak peduli huruf besar ("Goro" kena "Goro" / "Goro Goro no Mi",
+    --   tapi bukan "Goru" atau "Mito").
+    -- Daftar default versi lama: kalau yang tersimpan di file persis salah satunya (artinya user
+    -- belum pernah mengubahnya), dipakai default terbaru.
+    legacyRare = {
+        ["magu"] = true,
+        ["goro, magu, pika, ito, zushi, goru, hie, mochi, venom, pteranodon, tori, dragon, soul, leopard"] = true,
+    },
+    SummaryEnabled = true,   -- kirim ringkasan berkala
+    SummaryEvery = 3600,     -- detik (1 jam)
+    nextSummary = 0,
     queue = {},
     sending = false,
     started = false,
@@ -571,6 +597,16 @@ function Webhook.load()
             local data = game:GetService("HttpService"):JSONDecode(readfile(Webhook.ConfigFile))
             if type(data) == "table" then
                 if type(data.Enabled) == "boolean" then Webhook.Enabled = data.Enabled end
+                if type(data.Summary) == "boolean" then Webhook.SummaryEnabled = data.Summary end
+                if type(data.Rare) == "string" then
+                    local saved = Webhook.trim(data.Rare)
+                    -- normalisasi: huruf kecil, spasi dirapikan, jarak di sekitar koma diseragamkan
+                    local norm = saved:lower():gsub("%s+", " ")
+                    norm = norm:gsub("%s*,%s*", ", ")
+                    if not Webhook.legacyRare[norm] then
+                        Webhook.Rare = saved
+                    end
+                end
                 if type(data.Url) == "string" then Webhook.Url = Webhook.trim(data.Url) end
             end
         end
@@ -582,6 +618,8 @@ function Webhook.save()
         if typeof(writefile) == "function" then
             writefile(Webhook.ConfigFile, game:GetService("HttpService"):JSONEncode({
                 Enabled = Webhook.Enabled,
+                Summary = Webhook.SummaryEnabled,
+                Rare = Webhook.Rare,
                 Url = Webhook.Url,
             }))
         end
@@ -612,19 +650,33 @@ end
 function Webhook.flush()
     local ok, err = pcall(function()
         while #Webhook.queue > 0 do
-            local batch = {}
-            for _ = 1, math.min(10, #Webhook.queue) do
-                table.insert(batch, table.remove(Webhook.queue, 1))
+            local first = table.remove(Webhook.queue, 1)
+            local payload
+
+            if first.ping then
+                -- Item langka: pesan sendiri + @everyone (allowed_mentions wajib biar benar-benar ngePing)
+                payload = {
+                    content = "@everyone Item langka didapat: **" .. tostring(first.label or "?") .. "**",
+                    allowed_mentions = { parse = { "everyone" } },
+                    embeds = { first.embed },
+                }
+            else
+                -- Gabung embed biasa jadi 1 pesan (max 10), berhenti kalau ketemu entri ping
+                local batch = { first.embed }
+                while #batch < 10 and Webhook.queue[1] and not Webhook.queue[1].ping do
+                    table.insert(batch, table.remove(Webhook.queue, 1).embed)
+                end
+                payload = { embeds = batch }
             end
 
-            local okPost, res = pcall(Webhook.post, { embeds = batch })
+            local okPost, res = pcall(Webhook.post, payload)
 
             -- Kena rate limit Discord: tunggu sesuai Retry-After, coba sekali lagi
             if okPost and res and res.StatusCode == 429 then
                 local headers = res.Headers or {}
                 local retry = tonumber(headers["retry-after"] or headers["Retry-After"]) or 3
                 task.wait(math.min(retry, 30) + 0.5)
-                okPost, res = pcall(Webhook.post, { embeds = batch })
+                okPost, res = pcall(Webhook.post, payload)
             end
 
             if not okPost then
@@ -645,13 +697,47 @@ function Webhook.flush()
     Webhook.sending = false
 end
 
-function Webhook.push(embed)
+-- ping = true -> kirim sebagai pesan terpisah dengan @everyone (label = nama item)
+function Webhook.push(embed, ping, label)
     if not Webhook.valid() then return end
-    table.insert(Webhook.queue, embed)
+    table.insert(Webhook.queue, { embed = embed, ping = ping == true, label = label })
     if #Webhook.queue > 50 then table.remove(Webhook.queue, 1) end
     if Webhook.sending then return end
     Webhook.sending = true
     task.spawn(Webhook.flush)
+end
+
+-- Pecah teks jadi kata huruf/angka kecil: "Goro Goro no Mi" -> {goro, goro, no, mi}
+function Webhook.tokens(s)
+    local t = {}
+    for w in string.gmatch(string.lower(tostring(s)), "%w+") do
+        table.insert(t, w)
+    end
+    return t
+end
+
+-- Cocok kalau SEMUA kata sebuah entri Webhook.Rare muncul berurutan penuh di nama item
+-- (per kata utuh, bukan potongan huruf: "Hie" gak kena "Thief", "Ito" gak kena "Mito").
+-- Entri dipisah koma / baris baru; awalan jumlah ("1x Goro") diabaikan.
+function Webhook.isRare(name)
+    local nameTokens = Webhook.tokens(name)
+    for entry in string.gmatch(Webhook.Rare or "", "[^,\n]+") do
+        local clean = Webhook.trim(entry):gsub("^%d+%s*[xX]%s+", "")
+        local et = Webhook.tokens(clean)
+        if #et > 0 then
+            for i = 1, #nameTokens - #et + 1 do
+                local match = true
+                for j = 1, #et do
+                    if nameTokens[i + j - 1] ~= et[j] then
+                        match = false
+                        break
+                    end
+                end
+                if match then return true end
+            end
+        end
+    end
+    return false
 end
 
 function Webhook.embed(title, description, color)
@@ -666,6 +752,11 @@ end
 function Webhook.itemEmbed(name, amount)
     return Webhook.embed("Item Diperoleh!",
         string.format("**Item:** %s\n**Jumlah:** %s", name, tostring(amount)))
+end
+
+function Webhook.rareEmbed(name, amount)
+    return Webhook.embed("ITEM LANGKA DIPEROLEH!",
+        string.format("**Item:** %s\n**Jumlah:** %s", name, tostring(amount)), 15844367)
 end
 
 -- "Rare Fruit Chest x5" / "Rare Fruit Chest (5)" -> "Rare Fruit Chest"
@@ -697,18 +788,170 @@ function Webhook.check()
 
     local now = Webhook.snapshot()
 
-    if tick() < Webhook.quietUntil or not Webhook.Enabled or not Webhook.valid() then
-        Webhook.last = now -- update diam-diam, jangan kirim apa-apa
+    -- Respawn / baru mulai: update diam-diam, jangan hitung & jangan kirim apa-apa
+    if tick() < Webhook.quietUntil then
+        Webhook.last = now
         return
     end
 
+    local notify = Webhook.Enabled and Webhook.valid()
     for name, count in pairs(now) do
         local before = Webhook.last[name] or 0
         if count > before then
-            Webhook.push(Webhook.itemEmbed(name, count - before))
+            Webhook.addItem(name, count - before) -- statistik ringkasan, selalu dihitung
+            if notify then
+                if Webhook.isRare(name) then
+                    Webhook.push(Webhook.rareEmbed(name, count - before), true, name)
+                else
+                    Webhook.push(Webhook.itemEmbed(name, count - before))
+                end
+            end
         end
     end
     Webhook.last = now
+end
+
+-- ---------- Statistik & ringkasan berkala ----------
+function Webhook.newCounters()
+    return { doors = 0, failed = 0, chestsBought = 0, chestsOpened = 0, merchant = 0, items = {} }
+end
+
+Webhook.stats = {
+    win = Webhook.newCounters(),   -- jendela ringkasan yang lagi berjalan
+    tot = Webhook.newCounters(),   -- total sejak script jalan
+    winActive = 0, totActive = 0,  -- detik farm ON
+    activeSince = nil,
+    windowStart = tick(),
+    startedAt = tick(),
+}
+
+function Webhook.count(key, n)
+    local s = Webhook.stats
+    n = n or 1
+    s.win[key] = s.win[key] + n
+    s.tot[key] = s.tot[key] + n
+end
+
+function Webhook.addItem(name, n)
+    local s = Webhook.stats
+    s.win.items[name] = (s.win.items[name] or 0) + n
+    s.tot.items[name] = (s.tot.items[name] or 0) + n
+end
+
+-- Dipanggil tiap farm di-ON/OFF: catat lamanya script benar-benar aktif
+function Webhook.setActive(on)
+    local s, now = Webhook.stats, tick()
+    if on then
+        if not s.activeSince then s.activeSince = now end
+    elseif s.activeSince then
+        local d = now - s.activeSince
+        s.winActive = s.winActive + d
+        s.totActive = s.totActive + d
+        s.activeSince = nil
+    end
+end
+
+function Webhook.active(which)
+    local s = Webhook.stats
+    local base = (which == "win") and s.winActive or s.totActive
+    if s.activeSince then base = base + (tick() - s.activeSince) end
+    return base
+end
+
+function Webhook.fmtDur(seconds)
+    seconds = math.max(0, math.floor(seconds))
+    local h = math.floor(seconds / 3600)
+    local m = math.floor((seconds % 3600) / 60)
+    if h > 0 then return string.format("%dj %02dm", h, m) end
+    return string.format("%dm", m)
+end
+
+function Webhook.itemsText(totItems, winItems)
+    local list = {}
+    for name, n in pairs(totItems) do
+        table.insert(list, { name = name, n = n, d = winItems[name] or 0 })
+    end
+    if #list == 0 then return "-" end
+    table.sort(list, function(a, b)
+        if a.n ~= b.n then return a.n > b.n end
+        return a.name < b.name
+    end)
+
+    local lines, len = {}, 0
+    for i, it in ipairs(list) do
+        local line = string.format("• %s x%d", it.name, it.n)
+        -- (+n) = tambahan di jam terakhir (cuma ditampilin kalau sebagian lama, sebagian baru)
+        if it.d > 0 and it.d < it.n then line = line .. string.format(" (+%d)", it.d) end
+        if i > 15 or len + #line > 900 then
+            table.insert(lines, string.format("... +%d item lain", #list - i + 1))
+            break
+        end
+        table.insert(lines, line)
+        len = len + #line + 1
+    end
+    return table.concat(lines, "\n")
+end
+
+-- KUMULATIF: tiap ringkasan memuat total sejak script jalan (jam ke-2 = 2 jam, jam ke-3 = 3 jam, dst).
+-- (+n) di tiap angka = tambahan sejak ringkasan sebelumnya.
+function Webhook.summaryEmbed(manual)
+    local s = Webhook.stats
+    local w, t = s.win, s.tot
+    local elapsed = tick() - s.startedAt
+    local hours = math.max(1, math.floor(elapsed / 3600 + 0.5))
+    local candy = getCandyCount()
+
+    local function pair(key)
+        return string.format("%d  (+%d)", t[key], w[key])
+    end
+
+    return {
+        title = manual and ("Ringkasan (manual) - " .. Webhook.fmtDur(elapsed))
+            or string.format("Ringkasan %d Jam", hours),
+        description = string.format(
+            "Total sejak script jalan: **%s**  |  Aktif: **%s**\n(+n) = tambahan sejak ringkasan sebelumnya",
+            Webhook.fmtDur(elapsed), Webhook.fmtDur(Webhook.active("tot"))),
+        color = 15844367, -- emas
+        fields = {
+            { name = "Door dikunjungi", value = pair("doors"), inline = true },
+            { name = "Door gagal", value = pair("failed"), inline = true },
+            { name = "Merchant", value = pair("merchant"), inline = true },
+            { name = "Chest dibeli", value = pair("chestsBought"), inline = true },
+            { name = "Chest dibuka", value = pair("chestsOpened"), inline = true },
+            { name = "Sekarang", value = string.format("Candy %s/%d\nChest %d",
+                candy and tostring(candy) or "-", Settings.CandyTarget, getChestCount()), inline = true },
+            { name = "Item diperoleh (total)", value = Webhook.itemsText(t.items, w.items), inline = false },
+        },
+        footer = { text = string.format("%s - %s", LocalPlayer.Name, os.date("%H:%M:%S - %d/%m/%Y")) },
+    }
+end
+
+-- manual = true: kirim sekarang tanpa mereset jendela hitungan
+function Webhook.sendSummary(manual)
+    Webhook.push(Webhook.summaryEmbed(manual))
+end
+
+function Webhook.resetWindow()
+    local s = Webhook.stats
+    local wasActive = s.activeSince ~= nil
+    Webhook.setActive(false) -- tutup segmen aktif ke win+tot
+    s.win = Webhook.newCounters()
+    s.winActive = 0
+    s.windowStart = tick()
+    if wasActive then Webhook.setActive(true) end
+end
+
+function Webhook.tickSummary()
+    if tick() < Webhook.nextSummary then return end
+    Webhook.nextSummary = tick() + Webhook.SummaryEvery
+
+    -- Jam sepi (farm gak pernah ON & gak ada item baru) gak perlu dikirim
+    local s = Webhook.stats
+    local hasActivity = Webhook.active("win") >= 1 or next(s.win.items) ~= nil
+    if Webhook.SummaryEnabled and Webhook.valid() and hasActivity then
+        Webhook.sendSummary(false)
+    end
+    Webhook.resetWindow()
 end
 
 function Webhook.start()
@@ -717,6 +960,9 @@ function Webhook.start()
 
     Webhook.last = Webhook.snapshot()
     Webhook.quietUntil = tick() + 3
+    Webhook.nextSummary = tick() + Webhook.SummaryEvery
+    Webhook.stats.windowStart = tick()
+    Webhook.stats.startedAt = tick()
 
     LocalPlayer.CharacterAdded:Connect(function()
         Webhook.quietUntil = tick() + 5
@@ -726,11 +972,79 @@ function Webhook.start()
         while true do
             task.wait(Webhook.Interval)
             pcall(Webhook.check)
+            pcall(Webhook.tickSummary)
         end
     end)
 end
 
 Webhook.load()
+
+-- ================= FPS Cap =================
+-- Batasi FPS ke Settings.FpsCap (default 20) lewat setfpscap milik executor, dan TULIS ULANG
+-- tiap Fps.Interval detik karena game / executor kadang mengembalikan FPS ke normal.
+-- OFF -> cap dilepas (setfpscap(0) = tanpa batas). Butuh executor yang punya setfpscap.
+-- Fps.current = FPS terukur (jumlah frame Heartbeat per detik), ditampilkan di GUI.
+local Fps = {
+    Interval = 1,
+    current = 0,
+    frames = 0,
+    last = tick(),
+    started = false,
+    warned = false,
+}
+
+function Fps.fn()
+    local fn = setfpscap or set_fps_cap
+    if typeof(fn) == "function" then return fn end
+    return nil
+end
+
+function Fps.write(value)
+    local fn = Fps.fn()
+    if not fn then
+        if not Fps.warned then
+            Fps.warned = true
+            print("[AutoEventDoor] Executor gak punya setfpscap, FPS cap gak bisa dipakai.")
+        end
+        return false
+    end
+    return pcall(fn, value)
+end
+
+-- Tulis cap sekarang (kalau fitur ON)
+function Fps.apply()
+    if not Settings.FpsCapEnabled then return false end
+    return Fps.write(Settings.FpsCap)
+end
+
+-- Lepas cap (dipanggil pas fitur dimatiin)
+function Fps.release()
+    return Fps.write(0)
+end
+
+function Fps.start()
+    if Fps.started then return end
+    Fps.started = true
+
+    RunService.Heartbeat:Connect(function()
+        Fps.frames = Fps.frames + 1
+    end)
+
+    Fps.apply()
+
+    task.spawn(function()
+        while true do
+            task.wait(Fps.Interval)
+
+            local now = tick()
+            Fps.current = math.floor(Fps.frames / math.max(now - Fps.last, 0.001) + 0.5)
+            Fps.frames, Fps.last = 0, now
+
+            -- Tulis ulang terus: kalau FPS lari di atas cap, atau cap-nya kebalik, dipaksa lagi
+            Fps.apply()
+        end
+    end)
+end
 
 -- ================= GUI =================
 -- Layout lebar + bertab (Farm / Gerak / Shop / Server) supaya gak panjang ke bawah.
@@ -874,8 +1188,8 @@ end
 -- ---------- Frame utama ----------
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 440, 0, 320)
-MainFrame.Position = UDim2.new(0, 20, 0.5, -160)
+MainFrame.Size = UDim2.new(0, 440, 0, 326)
+MainFrame.Position = UDim2.new(0, 20, 0.5, -163)
 MainFrame.BackgroundColor3 = UI.C.bg
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
@@ -906,26 +1220,29 @@ do
 end
 
 -- ---------- Info strip ----------
-StatusText = UI.label(MainFrame, "Status: OFF", UDim2.new(0, 12, 0, 36),
-    UDim2.new(1, -24, 0, 18), Color3.fromRGB(200, 200, 200), Enum.Font.Gotham, 13)
+StatusText = UI.label(MainFrame, "OFF", UDim2.new(0, 12, 0, 34),
+    UDim2.new(1, -24, 0, 20), Color3.fromRGB(200, 200, 200), Enum.Font.GothamBold, 14)
 
-ProgressLabel = UI.label(MainFrame, "Opened: 0/0", UDim2.new(0, 12, 0, 56),
-    UDim2.new(0.35, -12, 0, 18), UI.C.dim, Enum.Font.Gotham, 12)
+local StatusDetail = UI.label(MainFrame, "", UDim2.new(0, 12, 0, 54),
+    UDim2.new(1, -24, 0, 16), UI.C.dim, Enum.Font.Gotham, 11)
 
-local CandyLabel = UI.label(MainFrame, "Candy: -/500", UDim2.new(0.35, 0, 0, 56),
-    UDim2.new(0.65, -12, 0, 18), UI.C.candy, Enum.Font.GothamBold, 12)
+ProgressLabel = UI.label(MainFrame, "Opened: 0/0", UDim2.new(0, 12, 0, 72),
+    UDim2.new(0.4, -12, 0, 18), UI.C.dim, Enum.Font.Gotham, 12)
+
+local CandyLabel = UI.label(MainFrame, "Candy: -/290", UDim2.new(0.4, 0, 0, 72),
+    UDim2.new(0.6, -12, 0, 18), UI.C.candy, Enum.Font.GothamBold, 12)
 
 -- ---------- Tab bar + area konten ----------
 do
     local tabBar = Instance.new("Frame")
     tabBar.BackgroundTransparency = 1
-    tabBar.Position = UDim2.new(0, 10, 0, 80)
+    tabBar.Position = UDim2.new(0, 10, 0, 94)
     tabBar.Size = UDim2.new(1, -20, 0, 26)
     tabBar.Parent = MainFrame
 
-    for i, name in ipairs({"Farm", "Gerak", "Shop", "Server"}) do
-        local tab = UI.button(tabBar, name, UDim2.new(0.25 * (i - 1), 0, 0, 0),
-            UDim2.new(0.25, -4, 1, 0), UI.C.bar, 12)
+    for i, name in ipairs({"Farm", "Gerak", "Shop", "Server", "Webhook"}) do
+        local tab = UI.button(tabBar, name, UDim2.new(0.2 * (i - 1), 0, 0, 0),
+            UDim2.new(0.2, -4, 1, 0), UI.C.bar, 12)
         tab.MouseButton1Click:Connect(function() UI.select(name) end)
         UI.Tabs[name] = tab
     end
@@ -933,7 +1250,7 @@ do
     local content = Instance.new("Frame")
     content.BackgroundColor3 = UI.C.panel
     content.BorderSizePixel = 0
-    content.Position = UDim2.new(0, 10, 0, 112)
+    content.Position = UDim2.new(0, 10, 0, 124)
     content.Size = UDim2.new(1, -20, 0, 150)
     content.Parent = MainFrame
     UI.corner(content, 6)
@@ -947,7 +1264,7 @@ do
     UI.Content = content
 end
 
-local CooldownBox, ChestTriggerBox, MerchantItemsBox
+local CooldownBox, ChestTriggerBox, MerchantItemsBox, FpsCapBox, GeppoIntervalBox
 
 -- ---------- Tab: Farm ----------
 do
@@ -961,6 +1278,17 @@ do
     UI.toggle(page, UDim2.new(0.29, 0, 0, 68), UDim2.new(0.19, 0, 0, 26),
         function() return Settings.DoorGeppo end,
         function(v) Settings.DoorGeppo = v end)
+
+    UI.rowLabel(page, 102, "FPS Cap:")
+    FpsCapBox = UI.box(page, UDim2.new(0.28, 0, 0, 102), UDim2.new(0.24, 0, 0, 26), Settings.FpsCap)
+    UI.toggle(page, UDim2.new(0.54, 0, 0, 102), UDim2.new(0.22, 0, 0, 26),
+        function() return Settings.FpsCapEnabled end,
+        function(v)
+            Settings.FpsCapEnabled = v
+            if v then Fps.apply() else Fps.release() end
+        end)
+    UI.label(page, "ditulis ulang tiap detik", UDim2.new(0.78, 0, 0, 102), UDim2.new(0.22, 0, 0, 26),
+        UI.C.dim, Enum.Font.Gotham, 10)
 end
 
 -- ---------- Tab: Gerak ----------
@@ -994,9 +1322,16 @@ do
     UI.toggle(page, UDim2.new(0.28, 0, 0, 68), UDim2.new(0.24, 0, 0, 26),
         function() return Settings.GeppoPass end,
         function(v) Settings.GeppoPass = v end)
+    GeppoIntervalBox = UI.box(page, UDim2.new(0.54, 0, 0, 68), UDim2.new(0.22, 0, 0, 26), Settings.GeppoInterval)
+    UI.label(page, "detik / geppo", UDim2.new(0.78, 0, 0, 68), UDim2.new(0.22, 0, 0, 26),
+        UI.C.dim, Enum.Font.Gotham, 10)
 
-    UI.label(page, "Tween ON = gerak lewat BodyVelocity, OFF = tahan WASD",
-        UDim2.new(0, 0, 0, 104), UDim2.new(1, 0, 0, 18), UI.C.dim, Enum.Font.Gotham, 11)
+    UI.rowLabel(page, 102, "Respawn stuck:")
+    UI.toggle(page, UDim2.new(0.28, 0, 0, 102), UDim2.new(0.24, 0, 0, 26),
+        function() return Settings.StuckRespawn end,
+        function(v) Settings.StuckRespawn = v end)
+    UI.label(page, "reset karakter jika 6 door gagal beruntun",
+        UDim2.new(0.54, 0, 0, 102), UDim2.new(0.46, 0, 0, 26), UI.C.dim, Enum.Font.Gotham, 10)
 end
 
 -- ---------- Tab: Shop ----------
@@ -1017,7 +1352,7 @@ do
         Settings.MerchantItems, "Nama item, pisah koma")
 end
 
--- ---------- Tab: Server (private server + webhook) ----------
+-- ---------- Tab: Server (auto join private server) ----------
 do
     local page = UI.page("Server")
 
@@ -1031,12 +1366,22 @@ do
             PrivateServer.save()
         end, "Join: ")
 
-    UI.rowLabel(page, 34, "Webhook URL:")
-    Webhook.UrlBox = UI.box(page, UDim2.new(0.28, 0, 0, 34), UDim2.new(0.72, 0, 0, 26),
+    local hint = UI.label(page, "Dipakai saat script dijalankan di MAIN MENU: kirim kode, pilih Regular, lalu konfirmasi First Sea.",
+        UDim2.new(0, 0, 0, 36), UDim2.new(1, 0, 0, 40), UI.C.dim, Enum.Font.Gotham, 11)
+    hint.TextWrapped = true
+    hint.TextYAlignment = Enum.TextYAlignment.Top
+end
+
+-- ---------- Tab: Webhook ----------
+do
+    local page = UI.page("Webhook")
+
+    UI.rowLabel(page, 0, "Webhook URL:")
+    Webhook.UrlBox = UI.box(page, UDim2.new(0.28, 0, 0, 0), UDim2.new(0.72, 0, 0, 26),
         Webhook.Url, "https://discord.com/api/webhooks/...")
 
-    UI.rowLabel(page, 68, "Webhook item:")
-    UI.toggle(page, UDim2.new(0.28, 0, 0, 68), UDim2.new(0.34, -4, 0, 26),
+    UI.rowLabel(page, 34, "Notif item:")
+    UI.toggle(page, UDim2.new(0.28, 0, 0, 34), UDim2.new(0.34, -4, 0, 26),
         function() return Webhook.Enabled end,
         function(v)
             Webhook.Enabled = v
@@ -1044,7 +1389,7 @@ do
             Webhook.save()
         end)
 
-    local test = UI.button(page, "Test", UDim2.new(0.64, 0, 0, 68), UDim2.new(0.36, 0, 0, 26), UI.C.accent)
+    local test = UI.button(page, "Test", UDim2.new(0.64, 0, 0, 34), UDim2.new(0.36, 0, 0, 26), UI.C.accent)
     test.MouseButton1Click:Connect(function()
         Webhook.Url = Webhook.trim(Webhook.UrlBox.Text)
         Webhook.save()
@@ -1054,6 +1399,29 @@ do
         end
         Webhook.push(Webhook.embed("Test Webhook", "Webhook terhubung.", 3447003))
     end)
+
+    UI.rowLabel(page, 68, "Ringkasan 1 jam:")
+    UI.toggle(page, UDim2.new(0.28, 0, 0, 68), UDim2.new(0.34, -4, 0, 26),
+        function() return Webhook.SummaryEnabled end,
+        function(v)
+            Webhook.SummaryEnabled = v
+            Webhook.Url = Webhook.trim(Webhook.UrlBox.Text)
+            Webhook.save()
+        end)
+    local sumNow = UI.button(page, "Kirim sekarang", UDim2.new(0.64, 0, 0, 68), UDim2.new(0.36, 0, 0, 26), UI.C.accent)
+    sumNow.MouseButton1Click:Connect(function()
+        Webhook.Url = Webhook.trim(Webhook.UrlBox.Text)
+        Webhook.save()
+        if not Webhook.valid() then
+            print("[AutoEventDoor] Webhook URL belum valid (harus https://discord.com/api/webhooks/<id>/<token>).")
+            return
+        end
+        Webhook.sendSummary(true)
+    end)
+
+    UI.rowLabel(page, 102, "Ping @everyone:")
+    Webhook.RareBox = UI.box(page, UDim2.new(0.28, 0, 0, 102), UDim2.new(0.72, 0, 0, 26),
+        Webhook.Rare, "Item langka, pisah koma")
 end
 
 UI.select("Farm")
@@ -1064,13 +1432,89 @@ ToggleButton = UI.button(MainFrame, "OFF", UDim2.new(0, 10, 1, -44), UDim2.new(0
 local ApplyButton = UI.button(MainFrame, "Apply Settings", UDim2.new(0.62, 2, 1, -44),
     UDim2.new(0.38, -12, 0, 34), UI.C.accent, 13)
 
+-- ---------- Status (judul berwarna + detail real-time) ----------
+-- Stat.set(judul, detail, jenis): detail boleh string ATAU function() -> string yang
+-- dievaluasi 4x/detik (jarak, ETA, countdown update sendiri).
+-- Jenis: move (biru) / work (hijau) / wait (oranye) / warn (merah) / idle (abu).
+local Stat = {
+    title = "Siaga", detail = "", detailFn = nil, note = "", kind = "idle", since = tick(),
+    colors = {
+        move = Color3.fromRGB(90, 170, 255),
+        work = Color3.fromRGB(90, 210, 130),
+        wait = Color3.fromRGB(255, 180, 80),
+        warn = Color3.fromRGB(255, 110, 110),
+        idle = Color3.fromRGB(200, 200, 200),
+    },
+}
+
+function Stat.set(title, detail, kind)
+    Stat.title = title
+    if type(detail) == "function" then
+        Stat.detailFn, Stat.detail = detail, ""
+    else
+        Stat.detailFn, Stat.detail = nil, detail or ""
+    end
+    Stat.note = ""
+    Stat.kind = kind or "work"
+    Stat.since = tick()
+end
+
+function Stat.clear()
+    Stat.set("Siaga", "", "idle")
+end
+
+-- Simpan / pulihkan status (dipakai aksi sementara: stun, keluar atap)
+function Stat.snapshot()
+    return { Stat.title, Stat.detail, Stat.detailFn, Stat.note, Stat.kind, Stat.since }
+end
+
+function Stat.restore(s)
+    Stat.title, Stat.detail, Stat.detailFn, Stat.note, Stat.kind, Stat.since =
+        s[1], s[2], s[3], s[4], s[5], s[6]
+end
+
+-- Detail "jarak | ETA | mode" menuju posisi dari getPos() (re-evaluasi tiap render)
+function Stat.towards(getPos, extra)
+    return function()
+        local p = getPos()
+        if not p then return extra or "" end
+        local d = (RootPart.Position - p).Magnitude
+        local speed = Settings.TweenMode and math.max(Settings.TweenSpeed, 1) or math.max(Humanoid.WalkSpeed, 1)
+        local text = string.format("%.0f stud  |  ETA ~%ds  |  %s", d, math.ceil(d / speed),
+            Settings.TweenMode and "tween" or "WASD")
+        if extra and extra ~= "" then text = extra .. "  |  " .. text end
+        return text
+    end
+end
+
+local function renderStatus()
+    if not Enabled then
+        StatusText.Text = "OFF"
+        StatusText.TextColor3 = UI.C.off
+        StatusDetail.Text = "Tekan  ,  atau tombol ON untuk mulai"
+        return
+    end
+
+    local detail = Stat.detail
+    if Stat.detailFn then
+        local ok, res = pcall(Stat.detailFn)
+        detail = ok and tostring(res or "") or ""
+    end
+    if Stat.note ~= "" then
+        detail = detail .. (detail ~= "" and "  |  " or "") .. Stat.note
+    end
+
+    StatusText.Text = Stat.title
+    StatusText.TextColor3 = Stat.colors[Stat.kind] or UI.C.text
+    StatusDetail.Text = detail
+end
+
 local function updateGuiState()
+    renderStatus()
     if Enabled then
-        StatusText.Text = "Status: ON" .. (StatusExtra ~= "" and (" - " .. StatusExtra) or "")
         ToggleButton.Text = "ON"
         ToggleButton.BackgroundColor3 = UI.C.on
     else
-        StatusText.Text = "Status: OFF"
         ToggleButton.Text = "OFF"
         ToggleButton.BackgroundColor3 = UI.C.off
     end
@@ -1084,7 +1528,7 @@ local function updateGuiState()
         end
     end
     local total = math.max(LastKnownDoorCount, count)
-    ProgressLabel.Text = "Opened: " .. count .. "/" .. total
+    ProgressLabel.Text = "Opened: " .. count .. "/" .. total .. "  |  FPS " .. Fps.current
 
     CandyLabel.Text = getCandyText()
 end
@@ -1097,6 +1541,8 @@ local function applySettings()
     local ct = tonumber(CandyTargetBox.Text)
     local cd = tonumber(CooldownBox.Text)
     local cr = tonumber(ChestTriggerBox.Text)
+    local fc = tonumber(FpsCapBox.Text)
+    local gi = tonumber(GeppoIntervalBox.Text)
     Settings.MerchantItems = MerchantItemsBox.Text
 
     -- Kode private server: simpan ke file/getgenv biar kebaca di main menu
@@ -1105,9 +1551,12 @@ local function applySettings()
 
     -- Webhook Discord
     Webhook.Url = Webhook.trim(Webhook.UrlBox.Text)
+    Webhook.Rare = Webhook.trim(Webhook.RareBox.Text)
     Webhook.save()
 
     if cr and cr >= 0 then Settings.ChestOpenAt = math.floor(cr) end
+    if fc and fc >= 5 then Settings.FpsCap = math.floor(fc) end
+    if gi and gi >= 0.1 then Settings.GeppoInterval = gi end
 
     if ts and ts > 0 then Settings.TweenSpeed = ts end
     if ct and ct > 0 then Settings.CandyTarget = math.floor(ct) end
@@ -1128,9 +1577,13 @@ local function applySettings()
     CandyTargetBox.Text = tostring(Settings.CandyTarget)
     CooldownBox.Text = tostring(Settings.DoorCooldown)
     ChestTriggerBox.Text = tostring(Settings.ChestOpenAt)
+    FpsCapBox.Text = tostring(Settings.FpsCap)
+    GeppoIntervalBox.Text = tostring(Settings.GeppoInterval)
     PrivateServer.CodeBox.Text = PrivateServer.Code
     Webhook.UrlBox.Text = Webhook.Url
+    Webhook.RareBox.Text = Webhook.Rare
 
+    Fps.apply() -- cap baru langsung ditulis
     updateGuiState()
 end
 
@@ -1138,13 +1591,14 @@ ApplyButton.MouseButton1Click:Connect(applySettings)
 
 -- Kotak angka: Enter = apply. Kotak teks panjang (kode / URL): apply tiap fokus lepas
 -- (biasanya di-paste lalu klik di luar).
-for _, box in ipairs({RadiusBox, DurationBox, SpeedBox, TweenSpeedBox, CandyTargetBox, CooldownBox, ChestTriggerBox}) do
+for _, box in ipairs({RadiusBox, DurationBox, SpeedBox, TweenSpeedBox, CandyTargetBox, CooldownBox, ChestTriggerBox, FpsCapBox, GeppoIntervalBox}) do
     box.FocusLost:Connect(function(enterPressed)
         if enterPressed then applySettings() end
     end)
 end
 PrivateServer.CodeBox.FocusLost:Connect(function() applySettings() end)
 Webhook.UrlBox.FocusLost:Connect(function() applySettings() end)
+Webhook.RareBox.FocusLost:Connect(function() applySettings() end)
 MerchantItemsBox.FocusLost:Connect(function()
     Settings.MerchantItems = MerchantItemsBox.Text
 end)
@@ -1208,6 +1662,19 @@ local function getAllEventDoors()
 
     LastKnownDoorCount = #doors -- simpen buat progress label "Opened: x/total"
     return doors
+end
+
+-- Label singkat door buat status: "#12 (NamaBuilding)"
+local function doorLabel(door)
+    local building = door and door.Parent and door.Parent.Parent
+    if building then
+        for i, child in ipairs(building:GetChildren()) do
+            if child == door.Parent then
+                return "#" .. i .. " (" .. child.Name .. ")"
+            end
+        end
+    end
+    return door and door.Name or "?"
 end
 
 -- Pilih door berikutnya:
@@ -1294,10 +1761,12 @@ local function waitUntilNotStunned()
     if not isStunned() then return false end
 
     local start = tick()
-    while Enabled and isStunned() do
-        StatusExtra = string.format("stun %.1fs", tick() - start)
-        updateGuiState()
+    local prev = Stat.snapshot()
+    Stat.set("Stun / animasi", function()
+        return string.format("menunggu karakter bisa gerak lagi (%.1fs)", tick() - start)
+    end, "warn")
 
+    while Enabled and isStunned() do
         if tick() - start >= STUN_MAX_WAIT then
             print("[AutoEventDoor] Stun lebih dari " .. STUN_MAX_WAIT .. " detik, lanjut paksa.")
             break
@@ -1305,8 +1774,7 @@ local function waitUntilNotStunned()
         task.wait(0.1)
     end
 
-    StatusExtra = ""
-    updateGuiState()
+    Stat.restore(prev)
     task.wait(0.15) -- jeda kecil biar kontrol karakter balik normal
     return true
 end
@@ -1507,7 +1975,7 @@ end
 local Nav = {
     -- path
     Variants = {},          -- diisi di bawah (urutan percobaan AgentRadius)
-    MaxAttempts = 3,        -- hitung ulang path dari posisi sekarang sampai sekian kali
+    MaxAttempts = 4,        -- hitung ulang path dari posisi sekarang sampai sekian kali
     MinGap = 6,             -- waypoint lebih rapat dari ini dibuang (kecuali belokan/lompat)
     TurnAngle = 35,         -- derajat; belokan setajam ini wajib dipertahankan
     -- arrival
@@ -1522,7 +1990,10 @@ local Nav = {
     MaxStrikes = 3,
     -- roof escape
     MinGroundY = 3,         -- permukaan di bawah ini dianggap air/bukan tujuan
-    MaxExitPaths = 16,      -- maksimal kandidat titik keluar yang di-path
+    MaxExitPaths = 8,       -- maksimal kandidat titik keluar yang di-path
+    ExitBudget = 3.5,       -- detik maksimal buat nyari titik keluar (jangan diem lama)
+    RoofCheckHeight = 40,   -- atap lebih tinggi dari ini dianggap bukan atap
+    RoofRays = 4,           -- dari 5 sinar ke atas, minimal sekian yang kena baru dianggap ketutup atap
     -- tween
     TweenStop = 2.5,
     TweenReachMid = 3.5,
@@ -1532,12 +2003,25 @@ local Nav = {
     MinProgress = 1.5,
     NearFlat = 4,
     MaxStuckChecks = 3,     -- cek progress berturut-turut tanpa kemajuan = tween nyerah (path dihitung ulang)
+    -- pemulihan posisi buntu / terkurung
+    MaxRecoveries = 2,      -- berapa kali geser/lompat per goTo kalau path gagal gara-gara posisi kita
+    RelocateDist = 14,      -- jarak maksimal cari ruang terbuka (stud)
+    HopDist = 14,           -- jarak lompat keluar (stud)
+    HopClearY = 9,          -- tinggi sinar cek "bebas di atas rintangan" (dari pusat badan)
+    HopUpSpeed = 40,
+    HopUpTime = 0.45,
+    HopFwdSpeed = 16,
+    HopFwdTime = 0.7,
+    StreakHop = 3,          -- door gagal berturut-turut sebanyak ini -> lompat keluar
+    RespawnStreak = 6,      -- ...sebanyak ini -> respawn (kalau Settings.StuckRespawn ON)
+    failStreak = 0,
+    lastStatusName = "",    -- hasil PathStatus terakhir (buat diagnosa & keputusan pemulihan)
 }
 
-function Nav.agent(radius)
+function Nav.agent(radius, height)
     return {
         AgentRadius = radius,
-        AgentHeight = 5,
+        AgentHeight = height or 5,
         AgentCanJump = true,
         AgentJumpHeight = 7,
         AgentMaxSlope = 45,
@@ -1545,7 +2029,7 @@ function Nav.agent(radius)
     }
 end
 
-Nav.Variants = { Nav.agent(3), Nav.agent(2), Nav.agent(1.5) }
+Nav.Variants = { Nav.agent(3), Nav.agent(2), Nav.agent(1.5), Nav.agent(1, 4) }
 
 -- ---------- util raycast ----------
 function Nav.worldIgnore()
@@ -1598,9 +2082,19 @@ function Nav.standingHeight(hum, root)
     return hum.HipHeight + root.Size.Y / 2
 end
 
+-- Ketutup atap beneran = hampir semua dari 5 sinar ke atas kena sesuatu yang dekat
+-- (kanopi / teras sebagian & objek tinggi di langit gak dihitung).
 function Nav.isCovered(pos)
-    local r = workspace:Raycast(pos, Vector3.new(0, 200, 0), Nav.rayParams(Nav.worldIgnore()))
-    return r ~= nil
+    local params = Nav.rayParams(Nav.worldIgnore())
+    local up = Vector3.new(0, Nav.RoofCheckHeight, 0)
+    local hits = 0
+    for _, o in ipairs({
+        Vector3.zero, Vector3.new(4, 0, 0), Vector3.new(-4, 0, 0),
+        Vector3.new(0, 0, 4), Vector3.new(0, 0, -4),
+    }) do
+        if workspace:Raycast(pos + o, up, params) then hits = hits + 1 end
+    end
+    return hits >= Nav.RoofRays
 end
 
 -- Garis pandang ke pintu: kosong, atau yang kena memang bagian pintu itu sendiri
@@ -1615,19 +2109,37 @@ function Nav.jump()
 end
 
 -- ---------- path ----------
--- Return: waypoints, path   (nil kalau semua varian gagal)
-function Nav.computePath(fromPos, toPos, maxVariants)
+-- Return: waypoints, path, partial   (nil kalau semua varian gagal)
+-- Nav.lastStatusName = PathStatus varian terakhir yang dicoba (Success / NoPath /
+-- FailStartNotEmpty / FailFinishNotEmpty / ClosestNoPath / ClosestOutOfRange).
+-- allowPartial: kalau gak ada yang Success, pakai path "terdekat" (ClosestNoPath /
+-- ClosestOutOfRange) -> partial = true.
+function Nav.computePath(fromPos, toPos, maxVariants, allowPartial)
     local n = math.min(maxVariants or #Nav.Variants, #Nav.Variants)
+    local partialWps, partialPath
+    Nav.lastStatusName = "Error"
+
     for i = 1, n do
         local path = PathfindingService:CreatePath(Nav.Variants[i])
         local ok = pcall(function()
             path:ComputeAsync(fromPos, toPos)
         end)
-        if ok and path.Status == Enum.PathStatus.Success then
-            return path:GetWaypoints(), path
+        if ok then
+            local status = path.Status
+            Nav.lastStatusName = status.Name
+            if status == Enum.PathStatus.Success then
+                return path:GetWaypoints(), path, false
+            end
+            if allowPartial and not partialWps
+                and (status == Enum.PathStatus.ClosestNoPath or status == Enum.PathStatus.ClosestOutOfRange) then
+                local wps = path:GetWaypoints()
+                if #wps >= 2 then partialWps, partialPath = wps, path end
+            end
         end
     end
-    return nil
+
+    if partialWps then return partialWps, partialPath, true end
+    return nil, nil, false
 end
 
 function Nav.pathLength(waypoints)
@@ -1690,7 +2202,7 @@ end
 function Nav.pickGoal(goals)
     local best, bestWps, bestPath, bestLen
     for _, g in ipairs(goals) do
-        local wps, path = Nav.computePath(RootPart.Position, g)
+        local wps, path = Nav.computePath(RootPart.Position, g, 2)
         if wps then
             local len = Nav.pathLength(wps)
             if not bestLen or len < bestLen then
@@ -1865,7 +2377,7 @@ function Nav.tweenAlong(points, timeout, isDone, state)
         task.spawn(function()
             while tweening and Enabled do
                 fireGeppoOnce()
-                task.wait(0.1)
+                task.wait(math.max(Settings.GeppoInterval or 0.5, 0.1))
             end
         end)
     end
@@ -2007,6 +2519,7 @@ function Nav.findExit()
     local origin = RootPart.Position
     local params = Nav.rayParams(Nav.worldIgnore())
     local tried = 0
+    local t0 = tick()
 
     for radius = 10, 160, 10 do
         for k = 0, 15 do
@@ -2015,6 +2528,7 @@ function Nav.findExit()
             local hit = workspace:Raycast(sample + Vector3.new(0, 300, 0), Vector3.new(0, -500, 0), params)
 
             if hit and hit.Position.Y > Nav.MinGroundY and hit.Normal.Y > 0.6 then
+                if (tick() - t0) > Nav.ExitBudget then return nil end
                 tried = tried + 1
                 local wps, path = Nav.computePath(origin, hit.Position + Vector3.new(0, 3, 0), 1)
                 if wps then return hit.Position, wps, path end
@@ -2026,16 +2540,16 @@ function Nav.findExit()
 end
 
 function Nav.escapeRoof()
-    StatusExtra = "keluar dari atap"
-    updateGuiState()
+    local prev = Stat.snapshot()
+    Stat.set("Keluar dari bawah atap", "mencari titik terbuka...", "warn")
 
     local exitPos, wps, path = Nav.findExit()
     if not exitPos then
         print("[AutoEventDoor] Gak nemu jalan keluar dari bawah atap.")
-        StatusExtra = ""
-        updateGuiState()
+        Stat.restore(prev)
         return false
     end
+    Stat.set("Keluar dari bawah atap", Stat.towards(function() return exitPos end, "titik terbuka"), "warn")
 
     local function done()
         local d = RootPart.Position - exitPos
@@ -2047,29 +2561,226 @@ function Nav.escapeRoof()
     local status = Nav.follow(Nav.filter(wps), done, state)
     if conn then conn:Disconnect() end
 
-    StatusExtra = ""
-    updateGuiState()
+    Stat.restore(prev)
     return status == "Arrived" or status == "Finished"
+end
+
+-- ---------- pemulihan: posisi buntu / terkurung ----------
+-- Jarak bebas horizontal dari origin sepanjang dir (maks maxDist), diukur pada ketinggian
+-- dy relatif pusat badan.
+function Nav.freeDistance(origin, dir, maxDist, dy, params)
+    local from = origin + Vector3.new(0, dy, 0)
+    local r = workspace:Raycast(from, dir * maxDist, params)
+    if r then return (r.Position - from).Magnitude end
+    return maxDist
+end
+
+function Nav.flatDir(from, to)
+    local d = Vector3.new(to.X - from.X, 0, to.Z - from.Z)
+    if d.Magnitude > 0.1 then return d.Unit end
+    return Vector3.zero
+end
+
+-- Pindah ke ruang terbuka terdekat TANPA pathfinding: cari arah yang bebas di tinggi kaki &
+-- pinggang (condong ke arah tujuan), lalu jalan lurus ke sana.
+-- Return: true kalau posisi bergeser >= 3 stud
+function Nav.relocate(goalPos)
+    local root, hum = RootPart, Humanoid
+    if not root or not root.Parent or not hum or not hum.Parent then return false end
+
+    local origin = root.Position
+    local standH = Nav.standingHeight(hum, root)
+    local params = Nav.rayParams(Nav.worldIgnore())
+    local goalDir = Nav.flatDir(origin, goalPos)
+
+    local best, bestScore, bestFree
+    for k = 0, 15 do
+        local a = k * math.pi / 8
+        local dir = Vector3.new(math.cos(a), 0, math.sin(a))
+        local free = math.min(
+            Nav.freeDistance(origin, dir, Nav.RelocateDist, -1.5, params),
+            Nav.freeDistance(origin, dir, Nav.RelocateDist, 1.5, params))
+        if free >= 4 then
+            local score = free + 5 * dir:Dot(goalDir)
+            if not bestScore or score > bestScore then
+                best, bestScore, bestFree = dir, score, free
+            end
+        end
+    end
+    if not best then return false end
+
+    local target = origin + best * (bestFree - 1.5)
+    local gy = Nav.groundY(target + Vector3.new(0, 4, 0), 30)
+    if not gy or gy < Nav.MinGroundY or math.abs(gy - (origin.Y - standH)) > 10 then
+        return false
+    end
+    local point = Vector3.new(target.X, gy, target.Z)
+
+    local function done()
+        local d = RootPart.Position - point
+        return Vector3.new(d.X, 0, d.Z).Magnitude <= Nav.PointArrive - 1
+    end
+    Nav.follow({ { Position = point } }, done)
+
+    return (RootPart.Position - origin).Magnitude >= 3
+end
+
+-- Lompat keluar dari kurungan (peti / tong / labu / sudut teras): naik ~18 stud, lalu maju
+-- ~12 stud ke arah yang paling lapang DI ATAS rintangan dan mendaratnya di tanah yang rata
+-- (bukan atap / jurang / air). Murni BodyVelocity, tanpa noclip.
+-- Return: true kalau posisi bergeser >= 3 stud
+function Nav.hopOut(goalPos)
+    local root, hum = RootPart, Humanoid
+    if not root or not root.Parent or not hum or not hum.Parent then return false end
+
+    local origin = root.Position
+    local standH = Nav.standingHeight(hum, root)
+    local groundNow = Nav.groundY(origin, 40) or (origin.Y - standH)
+    local params = Nav.rayParams(Nav.worldIgnore())
+    local goalDir = goalPos and Nav.flatDir(origin, goalPos) or Vector3.zero
+
+    local best, bestScore
+    for k = 0, 15 do
+        local a = k * math.pi / 8
+        local dir = Vector3.new(math.cos(a), 0, math.sin(a))
+        local land = origin + dir * Nav.HopDist
+        local gy = Nav.groundY(land + Vector3.new(0, 14, 0), 60)
+        if gy and gy > Nav.MinGroundY and math.abs(gy - groundNow) <= 8 then
+            local clear = Nav.freeDistance(origin, dir, Nav.HopDist, Nav.HopClearY, params)
+            local score = clear + 5 * dir:Dot(goalDir)
+            if not bestScore or score > bestScore then best, bestScore = dir, score end
+        end
+    end
+    if not best then return false end
+
+    local vel = Instance.new("BodyVelocity")
+    vel.Name = "EvDoorHopVel"
+    vel.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+    vel.Velocity = Vector3.zero
+    vel.Parent = root
+    hum.PlatformStand = true
+    hum.AutoRotate = false
+
+    -- fase 1: naik (sedikit maju)
+    local t0 = tick()
+    while Enabled and (tick() - t0) < Nav.HopUpTime do
+        vel.Velocity = best * 8 + Vector3.new(0, Nav.HopUpSpeed, 0)
+        RunService.Heartbeat:Wait()
+    end
+
+    -- fase 2: maju, sumbu Y dilepas -> gravitasi yang menurunkan
+    vel.MaxForce = Vector3.new(1e9, 0, 1e9)
+    t0 = tick()
+    while Enabled and (tick() - t0) < Nav.HopFwdTime do
+        vel.Velocity = best * Nav.HopFwdSpeed
+        RunService.Heartbeat:Wait()
+    end
+
+    pcall(function() vel:Destroy() end)
+    pcall(function()
+        hum.PlatformStand = false
+        hum.AutoRotate = true
+    end)
+
+    -- tunggu mendarat
+    t0 = tick()
+    while Enabled and hum.Parent and hum.FloorMaterial == Enum.Material.Air and (tick() - t0) < 2 do
+        task.wait(0.1)
+    end
+    task.wait(0.2)
+
+    return RootPart ~= nil and (RootPart.Position - origin).Magnitude >= 3
+end
+
+-- Dipanggil goTo kalau path gagal gara-gara posisi kita sendiri.
+-- level 1: pindah ke ruang terbuka, kalau terkurung lompat keluar.
+-- level 2: kalau beneran ketutup atap, cari jalan keluar (dibatasi waktu); sisanya lompat.
+-- Return: true kalau posisi bergeser (layak hitung path lagi)
+function Nav.recover(goalPos, level)
+    local prev = Stat.snapshot()
+    local why = tostring(Nav.lastStatusName)
+    local moved = false
+
+    if level <= 1 then
+        Stat.set("Posisi buntu", "path gagal (" .. why .. "), pindah ke ruang terbuka...", "warn")
+        moved = Nav.relocate(goalPos)
+        if not moved and Enabled then
+            Stat.set("Terkurung", "lompat keluar dari rintangan...", "warn")
+            moved = Nav.hopOut(goalPos)
+        end
+    else
+        if Nav.isCovered(RootPart.Position) then
+            moved = Nav.escapeRoof()
+        end
+        if not moved and Enabled then
+            Stat.set("Terkurung", "lompat keluar dari rintangan...", "warn")
+            moved = Nav.hopOut(goalPos)
+        end
+    end
+
+    Stat.restore(prev)
+    return moved
+end
+
+-- Dipanggil mainLoop kalau beberapa door gagal BERUNTUN (script diem muter-muter di tempat).
+-- Lompat keluar; kalau Settings.StuckRespawn ON & sudah RespawnStreak kali -> respawn karakter.
+function Nav.hardRecover(streak)
+    local prev = Stat.snapshot()
+    print("[AutoEventDoor] " .. streak .. " door gagal berturut-turut, pemulihan posisi...")
+
+    if Settings.StuckRespawn and streak >= Nav.RespawnStreak then
+        Stat.set("Macet berturut-turut", streak .. " door gagal, respawn karakter...", "warn")
+        pcall(function() Humanoid.Health = 0 end)
+        task.wait(1)
+
+        local t0 = tick()
+        while Enabled and (tick() - t0) < 20 do
+            if Humanoid and Humanoid.Parent and Humanoid.Health > 0 and RootPart and RootPart.Parent then
+                break
+            end
+            task.wait(0.5)
+        end
+        task.wait(1.5)
+        Nav.failStreak = 0
+    else
+        Stat.set("Macet berturut-turut", streak .. " door gagal, lompat keluar...", "warn")
+        Nav.hopOut(nil)
+    end
+
+    Stat.restore(prev)
 end
 
 -- ---------- orkestrator ----------
 -- Return: "Arrived" | "Blocked" | "Stuck" | "Stopped"
 function Nav.goTo(goalPos, isDone, preWps, prePath)
+    local recoveries = 0
+
     for attempt = 1, Nav.MaxAttempts do
         if not Enabled then return "Stopped" end
         if isDone() then return "Arrived" end
 
-        local waypoints, path
+        if attempt > 1 then
+            Stat.note = "path ulang " .. attempt .. "/" .. Nav.MaxAttempts
+        end
+
+        local waypoints, path, partial
         if attempt == 1 and preWps then
             waypoints, path = preWps, prePath
         else
-            waypoints, path = Nav.computePath(RootPart.Position, goalPos)
+            waypoints, path, partial = Nav.computePath(RootPart.Position, goalPos, nil, true)
         end
 
         if not waypoints then
-            -- Gak ada path: kalau lagi ketutup atap, keluar dulu lalu coba lagi
-            if Nav.isCovered(RootPart.Position) and Nav.escapeRoof() then
-                continue
+            local why = Nav.lastStatusName
+            print("[AutoEventDoor] Path gagal (" .. tostring(why) .. ").")
+
+            -- Gagal gara-gara POSISI kita (terkurung / pulau navmesh terpisah): geser dulu,
+            -- lalu coba lagi. FailFinishNotEmpty = tujuannya yang bermasalah -> gak ada gunanya geser.
+            if recoveries < Nav.MaxRecoveries and (why == "FailStartNotEmpty" or why == "NoPath") then
+                recoveries = recoveries + 1
+                if Nav.recover(goalPos, recoveries) then
+                    continue
+                end
             end
             return "Blocked"
         end
@@ -2085,6 +2796,11 @@ function Nav.goTo(goalPos, isDone, preWps, prePath)
             local d = RootPart.Position - goalPos
             if Vector3.new(d.X, 0, d.Z).Magnitude <= Nav.PointArrive + 2 then
                 return "Arrived"
+            end
+            -- Path parsial (tujuan gak punya navmesh / terlalu jauh): ujungnya didekati lurus
+            if partial then
+                Nav.follow({ { Position = goalPos } }, isDone)
+                if isDone() then return "Arrived" end
             end
         end
         -- "Stuck" / "Blocked" / "Finished" tapi belum dekat: loop = hitung ulang dari posisi sekarang
@@ -2236,6 +2952,7 @@ local function arriveAtWitch()
         ShopTarget.Position = ground
 
         print("[AutoEventDoor] Belum pas sampai di Witch, tween langsung (percobaan " .. attempt .. "/3).")
+        Stat.set("Menuju Witch (tween langsung)", Stat.towards(function() return ground end, "percobaan " .. attempt .. "/3"), "move")
         tweenToPoint(ground, 30)
         if closeEnough() then return true end
     end
@@ -2253,6 +2970,7 @@ local function doShopTrip()
     end
 
     print("[AutoEventDoor] Candy cukup, jalan ke Witch of Halloween...")
+    Stat.set("Menuju Witch of Halloween", Stat.towards(function() return ShopTarget.Position end, "candy cukup"), "move")
     local arrived = arriveAtWitch()
     if not Enabled then
         return false
@@ -2274,6 +2992,7 @@ local function doShopTrip()
             break -- candy udah gak cukup buat beli lagi
         end
 
+        Stat.set("Beli " .. SHOP_ITEM, string.format("pembelian ke-%d  |  candy %s", bought + 1, tostring(before)), "work")
         local ok, err = pcall(function()
             local remote = ReplicatedStorage:WaitForChild("HalloweenShopRemote", 5)
             remote:InvokeServer(SHOP_ITEM)
@@ -2294,6 +3013,7 @@ local function doShopTrip()
         end
 
         bought = bought + 1
+        Webhook.count("chestsBought", 1)
         if not (before and after) then
             break -- candy gak kebaca, gak bisa diverifikasi, cukup 1x
         end
@@ -2392,6 +3112,7 @@ local function doMerchantTrip(marker)
     print("[AutoEventDoor] Traveling Merchant muncul, jalan ke sana...")
 
     MerchantTarget.Position = pos
+    Stat.set("Menuju Traveling Merchant", Stat.towards(function() return pos end), "move")
     local arrived = walkToDoorHeld(MerchantTarget)
     if not arrived or not Enabled then
         return false
@@ -2403,9 +3124,11 @@ local function doMerchantTrip(marker)
     for _, itemName in ipairs(items) do
         if not Enabled then break end
 
+        Stat.set("Beli dari merchant", itemName, "work")
         local ok, res = pcall(buyMerchantItem, itemName)
         if ok and res ~= false then
             bought = bought + 1
+            Webhook.count("merchant", 1)
             print("[AutoEventDoor] Beli dari merchant: " .. itemName .. " (balasan server: " .. tostring(res) .. ")")
         else
             local err = ok and ("ditolak server: " .. tostring(res)) or res
@@ -2674,9 +3397,10 @@ end
 -- Nunggu sambil tetap respon ke toggle OFF
 local function waitWhileEnabled(seconds, label)
     local start = tick()
+    Stat.set(label, function()
+        return string.format("menunggu hasil %.0fs", math.max(0, seconds - (tick() - start)))
+    end, "work")
     while Enabled and (tick() - start) < seconds do
-        StatusExtra = string.format("%s %.0fs", label, seconds - (tick() - start))
-        updateGuiState()
         task.wait(0.25)
     end
 end
@@ -2697,8 +3421,7 @@ local function doChestOpen()
         -- Sudah tinggal sisa? Jangan buka lagi
         if getChestCount() <= CHEST_KEEP then
             print("[AutoEventDoor] Chest tinggal " .. getChestCount() .. ", berhenti buka.")
-            StatusExtra = ""
-            updateGuiState()
+            Stat.clear()
             return true
         end
 
@@ -2708,8 +3431,7 @@ local function doChestOpen()
             return false
         end
 
-        StatusExtra = "buka chest (sisa " .. last .. ")"
-        updateGuiState()
+        Stat.set("Buka Rare Fruit Chest", "sisa " .. last .. "  |  berhenti di " .. CHEST_KEEP, "work")
 
         clickScreenCenter()
         local accept = waitForAccept(PROMPT_WAIT)
@@ -2733,15 +3455,15 @@ local function doChestOpen()
         promptFails = 0
         acceptPrompt(accept)
 
-        waitWhileEnabled(OPEN_WAIT_AFTER_ACCEPT, "buka chest")
+        waitWhileEnabled(OPEN_WAIT_AFTER_ACCEPT, "Buka Rare Fruit Chest")
         if not Enabled then return false end
 
         local now = getChestCount()
         print("[AutoEventDoor] Buka chest siklus " .. cycle .. ": " .. last .. " -> " .. now)
+        if now < last then Webhook.count("chestsOpened", last - now) end
 
         if now <= CHEST_KEEP then
-            StatusExtra = ""
-            updateGuiState()
+            Stat.clear()
             return true
         end
 
@@ -2778,6 +3500,7 @@ local function mainLoop()
         -- Basket harus ter-equip dulu sebelum ngapa-ngapain (cari door / cek candy).
         -- Dicek tiap iterasi, jadi kalau ke-unequip / respawn, otomatis di-equip lagi.
         if not ensureBasketEquipped() then
+            Stat.set("Menunggu " .. BASKET_NAME, "tool gak ketemu di Backpack / Character", "warn")
             if not basketWarned and Enabled then
                 print("[AutoEventDoor] '" .. BASKET_NAME .. "' gak ketemu di Backpack/Character, nunggu... Tool yang kebaca: " .. listToolNames())
                 basketWarned = true
@@ -2835,8 +3558,7 @@ local function mainLoop()
                     print("[AutoEventDoor] Buka chest gagal, coba lagi 60 detik lagi. Lanjut farm candy dulu.")
                 end
 
-                StatusExtra = ""
-                updateGuiState()
+                Stat.clear()
             end
         end
 
@@ -2866,17 +3588,23 @@ local function mainLoop()
             local door = findNextEventDoor()
 
             if door then
+                local label = doorLabel(door)
+                Stat.set("Menuju event door " .. label,
+                    Stat.towards(function() return getDoorPosition(door) end), "move")
                 local arrived = walkToDoorHeld(door)
 
                 if arrived and door.Parent and Enabled then
+                    Nav.failStreak = 0
                     -- Kalau door ini masih cooldown, tunggu di sini sampai siap.
                     -- Sambil nunggu, kalau candy udah cukup buat beli chest, batalin
                     -- nunggu supaya iterasi berikutnya langsung ke Witch.
                     local interrupted = false
+                    if tick() < getDoorReadyAt(door) then
+                        Stat.set("Menunggu cooldown door", function()
+                            return label .. "  |  siap dalam " .. formatTime(getDoorReadyAt(door) - tick())
+                        end, "wait")
+                    end
                     while Enabled and door.Parent and tick() < getDoorReadyAt(door) do
-                        StatusExtra = "cooldown " .. formatTime(getDoorReadyAt(door) - tick())
-                        updateGuiState()
-
                         local candyNow = getCandyCount()
                         if candyNow and candyNow >= Settings.CandyTarget and tick() >= ShopRetryAt then
                             interrupted = true
@@ -2885,11 +3613,11 @@ local function mainLoop()
 
                         task.wait(1)
                     end
-                    StatusExtra = ""
-                    updateGuiState()
 
                     if not interrupted and Enabled and door.Parent then
                         LastVisit[door] = tick() -- cooldown mulai dihitung dari sekarang
+                        Stat.set("Sampai di event door " .. label,
+                            Settings.DoorGeppo and "geppo lalu fire prompt" or "fire prompt", "work")
 
                         -- Sampai di door: tunggu sebentar, Geppo SEKALI, baru fire prompt
                         if Settings.DoorGeppo then
@@ -2901,7 +3629,11 @@ local function mainLoop()
                             end
                         end
 
+                        Stat.set("Fire prompt " .. label, function()
+                            return string.format("%.1f / %.0f detik", tick() - Stat.since, Settings.HoldDuration)
+                        end, "work")
                         triggerDoorPrompt(door, Settings.HoldDuration)
+                        Webhook.count("doors", 1)
 
                         -- Animasi ambil candy / diculik = stun. Kasih waktu stun
                         -- ke-replicate, lalu tunggu sampai habis sebelum gerak lagi.
@@ -2910,6 +3642,7 @@ local function mainLoop()
 
                         -- Mundur sebentar sebelum cari pintu berikutnya - badan kemungkinan
                         -- lagi nempel ke tembok/pintu ini.
+                        Stat.set("Selesai door " .. label, "mundur, lalu cari door berikutnya", "idle")
                         if Enabled then
                             setKeyHeld(Enum.KeyCode.S, true)
                             task.wait(0.4)
@@ -2922,10 +3655,19 @@ local function mainLoop()
                     -- Door gagal dicapai: tetap DIHITUNG (kena cooldown juga), jadi
                     -- progress naik dan script lanjut ke door lain, bukan macet di sini
                     print("[AutoEventDoor] Gagal nyampe ke salah satu door, di-skip & dihitung.")
+                    Stat.set("Gagal sampai ke door " .. label, "di-skip & kena cooldown, lanjut door lain", "warn")
                     LastVisit[door] = tick()
+                    Webhook.count("failed", 1)
+
+                    -- Gagal beruntun = kemungkinan karakter terjebak: lompat keluar (atau respawn)
+                    Nav.failStreak = Nav.failStreak + 1
+                    if Nav.failStreak >= Nav.StreakHop then
+                        Nav.hardRecover(Nav.failStreak)
+                    end
                     updateGuiState()
                 end
             else
+                Stat.set("Mencari event door", "belum ada door yang tersedia / Building belum ke-load", "wait")
                 task.wait(0.5)
             end
         end
@@ -2933,7 +3675,7 @@ local function mainLoop()
         task.wait(0.2)
     end
 
-    StatusExtra = ""
+    Stat.clear()
     releaseAllMoveKeys()
     disableMovementMode()
     MainLoopRunning = false
@@ -2941,9 +3683,11 @@ end
 
 local function setEnabled(state)
     Enabled = state
+    Webhook.setActive(state)
     updateGuiState()
 
     if Enabled then
+        Stat.set("Memulai", "cek basket, lalu cari event door...", "work")
         print("[AutoEventDoor] ON")
         task.spawn(mainLoop)
     else
@@ -2968,13 +3712,21 @@ Humanoid.WalkSpeed = Settings.WalkSpeed
 updateGuiState()
 
 -- Refresh label Candy tiap 1 detik, independen dari ON/OFF status, biar keliatan real-time
+-- Status tampil real-time (4x/detik, murah); candy/progress/chest tiap 1 detik
 task.spawn(function()
+    local acc = 0
     while true do
-        CandyLabel.Text = getCandyText()
-        task.wait(1)
+        pcall(renderStatus)
+        acc = acc + 0.25
+        if acc >= 1 then
+            acc = 0
+            pcall(updateGuiState)
+        end
+        task.wait(0.25)
     end
 end)
 
+Fps.start()
 Webhook.start()
 
 print("[AutoEventDoor] Script loaded. Tekan ',' atau klik tombol GUI untuk toggle ON/OFF.")
