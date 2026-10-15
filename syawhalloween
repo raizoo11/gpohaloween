@@ -42,7 +42,11 @@
       beruntun -> lompat keluar (opsional respawn). Diagnosa PathStatus di console
     - Bridge MCP (opsional, default OFF): hubungkan ke bridge_server.py di komputermu supaya Claude bisa
       baca status/log & ubah setting (whitelist, tanpa eksekusi kode bebas)
-    - FPS Cap: batasi FPS ke 20 (setfpscap) & ditulis ulang tiap detik biar gak balik normal
+    - Auto Drop fruit (default OFF, tab Drop): equip fruit di daftar lalu tekan Backspace. Jalan HANYA di sela
+      farm (karakter diam), jadi gak bentrok sama gerak / fire prompt; item langka, Candy Corn Basket, dan
+      Rare Fruit Chest TIDAK PERNAH di-drop; basket di-equip lagi otomatis
+    - FPS Cap: batasi FPS ke 20 (setfpscap); ditulis ulang otomatis kalau FPS lari di atas cap (atau tiap 30 detik)
+    - Detektor hitch: frame >= 250 ms dicatat di log ("HITCH ... | status saat itu") buat cari sumber freeze
     - Toggle ON/OFF dengan tombol "," (Comma) atau lewat GUI
     - GUI bertab (Farm / Gerak / Shop / Server); RightShift = sembunyikan/tampilkan GUI
     - Status real-time: judul berwarna + detail (menuju door #N, jarak, ETA, cooldown, fire prompt, dll)
@@ -338,6 +342,9 @@ local Settings = {
     FpsCapEnabled = true,   -- batasi FPS (setfpscap) & tulis ulang terus
     FpsCap = 20,            -- batas FPS
     StuckRespawn = false,   -- 6 door gagal berturut-turut -> reset karakter (mati & respawn) sebagai jalan terakhir
+    AutoDrop = false,       -- drop otomatis fruit di DropList (equip + Backspace), cuma di sela farm. Default MATI
+    DropList = "Kilo, Suke, Spin, Heal, Bari, Mero, Horo, Gomu, Bomu, Yomi, Spring, Kira",
+    DropInterval = 10,      -- detik antar pengecekan Backpack buat fruit yang perlu di-drop
 }
 
 local BUILDING_PATH = {"Islands", "Spooksville", "Building"}
@@ -495,20 +502,41 @@ local function nameHas(name, hints)
     return false
 end
 
+-- Cache: hotbar:GetDescendants() itu mahal (ratusan objek GUI) dan dipanggil tiap detik lewat
+-- label candy/chest -> bikin hitch kecil berulang. Node yang ketemu disimpan; kalau gak ketemu,
+-- scan ulang paling cepat tiap 5 detik.
+local HotbarChestCache = { node = nil, missUntil = 0 }
+
 local function findHotbarChest()
+    local cached = HotbarChestCache.node
+    if cached and cached.Parent and cached:IsDescendantOf(game) then return cached end
+    HotbarChestCache.node = nil
+    if tick() < HotbarChestCache.missUntil then return nil end
+
     local gui = LocalPlayer:FindFirstChild("PlayerGui")
     local backpackGui = gui and gui:FindFirstChild("BackpackGui")
     local hotbar = backpackGui and backpackGui:FindFirstChild("Hotbar")
-    if not hotbar then return nil end
+    if not hotbar then
+        HotbarChestCache.missUntil = tick() + 5
+        return nil
+    end
 
     -- Jalur yang kamu kasih dulu (slot Zero), baru scan semua slot
     local zero = hotbar:FindFirstChild("Zero")
     local direct = zero and zero:FindFirstChild(CHEST_NAME)
-    if direct then return direct end
+    if direct then
+        HotbarChestCache.node = direct
+        return direct
+    end
 
     for _, d in ipairs(hotbar:GetDescendants()) do
-        if d.Name == CHEST_NAME then return d end
+        if d.Name == CHEST_NAME then
+            HotbarChestCache.node = d
+            return d
+        end
     end
+
+    HotbarChestCache.missUntil = tick() + 5
     return nil
 end
 
@@ -828,7 +856,7 @@ end
 
 -- ---------- Statistik & ringkasan berkala ----------
 function Webhook.newCounters()
-    return { doors = 0, failed = 0, chestsBought = 0, chestsOpened = 0, merchant = 0, items = {} }
+    return { doors = 0, failed = 0, chestsBought = 0, chestsOpened = 0, merchant = 0, dropped = 0, items = {} }
 end
 
 Webhook.stats = {
@@ -933,6 +961,7 @@ function Webhook.summaryEmbed(manual)
             { name = "Merchant", value = pair("merchant"), inline = true },
             { name = "Chest dibeli", value = pair("chestsBought"), inline = true },
             { name = "Chest dibuka", value = pair("chestsOpened"), inline = true },
+            { name = "Fruit di-drop", value = pair("dropped"), inline = true },
             { name = "Sekarang", value = string.format("Candy %s/%d\nChest %d",
                 candy and tostring(candy) or "-", Settings.CandyTarget, getChestCount()), inline = true },
             { name = "Item diperoleh (total)", value = Webhook.itemsText(t.items, w.items), inline = false },
@@ -1006,6 +1035,10 @@ local Fps = {
     last = tick(),
     started = false,
     warned = false,
+    lastApply = 0,
+    Refresh = 30,      -- tulis ulang paling lambat tiap sekian detik walau FPS terlihat normal
+    HitchMs = 250,     -- frame selambat ini dicatat sebagai HITCH di log
+    lastHitch = 0,
 }
 
 function Fps.fn()
@@ -1029,7 +1062,15 @@ end
 -- Tulis cap sekarang (kalau fitur ON)
 function Fps.apply()
     if not Settings.FpsCapEnabled then return false end
+    Fps.lastApply = tick()
     return Fps.write(Settings.FpsCap)
+end
+
+-- Tulis ulang HANYA kalau perlu: FPS terukur lari di atas cap (game / executor mengembalikannya)
+-- atau sudah Fps.Refresh detik. Nulis cap tiap detik tanpa alasan bisa bikin hitch di sebagian executor.
+function Fps.needsWrite()
+    return Settings.FpsCapEnabled
+        and (Fps.current > Settings.FpsCap + 2 or tick() - Fps.lastApply >= Fps.Refresh)
 end
 
 -- Lepas cap (dipanggil pas fitur dimatiin)
@@ -1041,8 +1082,18 @@ function Fps.start()
     if Fps.started then return end
     Fps.started = true
 
-    RunService.Heartbeat:Connect(function()
+    -- Detektor hitch: frame >= Fps.HitchMs dicatat beserta status script saat itu (lihat console /
+    -- get_log). Fps.describe diisi belakangan (butuh Stat yang dibuat setelah modul ini).
+    RunService.Heartbeat:Connect(function(dt)
         Fps.frames = Fps.frames + 1
+        if dt * 1000 >= Fps.HitchMs then
+            local now = tick()
+            if now - Fps.lastHitch >= 2 then
+                Fps.lastHitch = now
+                local where = Fps.describe and Fps.describe() or "?"
+                print(string.format("[AutoEventDoor] HITCH %.0f ms | %s", dt * 1000, where))
+            end
+        end
     end)
 
     Fps.apply()
@@ -1055,8 +1106,8 @@ function Fps.start()
             Fps.current = math.floor(Fps.frames / math.max(now - Fps.last, 0.001) + 0.5)
             Fps.frames, Fps.last = 0, now
 
-            -- Tulis ulang terus: kalau FPS lari di atas cap, atau cap-nya kebalik, dipaksa lagi
-            Fps.apply()
+            -- Kalau FPS lari di atas cap (atau cap-nya kebalik), dipaksa lagi
+            if Fps.needsWrite() then Fps.apply() end
         end
     end)
 end
@@ -1107,6 +1158,54 @@ function Bridge.save()
 end
 
 Bridge.load()
+
+-- ================= Auto Drop fruit - konfigurasi =================
+-- Equip fruit yang ada di Settings.DropList lalu tekan Backspace (drop bawaan game). Logikanya ada
+-- di dekat bagian "Equip Candy Corn Basket" dan dipanggil mainLoop di TITIK AMAN (karakter lagi
+-- diam: sebelum cari door / saat nunggu cooldown), jadi gak bentrok sama gerak, fire prompt, atau
+-- basket. Default MATI; pengaturan tersimpan ke file.
+local Drop = {
+    ConfigFile = "AutoEventDoor_Drop.json",
+    running = false,
+    manual = false,           -- true = lagi jalan dari tombol "Drop sekarang" waktu farm OFF
+    now = false,              -- permintaan "Drop sekarang" waktu farm ON (dijalankan mainLoop)
+    nextAt = 0,
+    skipUntil = setmetatable({}, { __mode = "k" }),  -- [tool] = tick sampai kapan dilewati (drop gagal)
+    Attempts = 3,             -- percobaan equip+Backspace per fruit
+    Gap = 0.8,                -- detik jeda antar fruit
+    MaxPerRun = 30,
+}
+
+function Drop.load()
+    pcall(function()
+        if typeof(isfile) == "function" and typeof(readfile) == "function" and isfile(Drop.ConfigFile) then
+            local data = game:GetService("HttpService"):JSONDecode(readfile(Drop.ConfigFile))
+            if type(data) == "table" then
+                if type(data.Enabled) == "boolean" then Settings.AutoDrop = data.Enabled end
+                if type(data.List) == "string" and Webhook.trim(data.List) ~= "" then
+                    Settings.DropList = Webhook.trim(data.List)
+                end
+                if type(data.Interval) == "number" and data.Interval >= 3 then
+                    Settings.DropInterval = math.floor(data.Interval)
+                end
+            end
+        end
+    end)
+end
+
+function Drop.save()
+    pcall(function()
+        if typeof(writefile) == "function" then
+            writefile(Drop.ConfigFile, game:GetService("HttpService"):JSONEncode({
+                Enabled = Settings.AutoDrop,
+                List = Settings.DropList,
+                Interval = Settings.DropInterval,
+            }))
+        end
+    end)
+end
+
+Drop.load()
 
 -- ================= GUI =================
 -- Layout lebar + bertab (Farm / Gerak / Shop / Server) supaya gak panjang ke bawah.
@@ -1304,9 +1403,9 @@ do
     tabBar.Size = UDim2.new(1, -20, 0, 26)
     tabBar.Parent = MainFrame
 
-    for i, name in ipairs({"Farm", "Gerak", "Shop", "Server", "Webhook"}) do
-        local tab = UI.button(tabBar, name, UDim2.new(0.2 * (i - 1), 0, 0, 0),
-            UDim2.new(0.2, -4, 1, 0), UI.C.bar, 12)
+    for i, name in ipairs({"Farm", "Gerak", "Shop", "Drop", "Server", "Webhook"}) do
+        local tab = UI.button(tabBar, name, UDim2.new((i - 1) / 6, 0, 0, 0),
+            UDim2.new(1 / 6, -4, 1, 0), UI.C.bar, 12)
         tab.MouseButton1Click:Connect(function() UI.select(name) end)
         UI.Tabs[name] = tab
     end
@@ -1328,7 +1427,7 @@ do
     UI.Content = content
 end
 
-local CooldownBox, ChestTriggerBox, MerchantItemsBox, FpsCapBox, GeppoIntervalBox
+local CooldownBox, ChestTriggerBox, MerchantItemsBox, FpsCapBox, GeppoIntervalBox, DropListBox, DropIntervalBox
 
 -- ---------- Tab: Farm ----------
 do
@@ -1414,6 +1513,38 @@ do
     UI.rowLabel(page, 68, "Item merchant:")
     MerchantItemsBox = UI.box(page, UDim2.new(0.28, 0, 0, 68), UDim2.new(0.72, 0, 0, 26),
         Settings.MerchantItems, "Nama item, pisah koma")
+end
+
+-- ---------- Tab: Drop (auto drop fruit) ----------
+do
+    local page = UI.page("Drop")
+
+    UI.rowLabel(page, 0, "Auto Drop:")
+    UI.toggle(page, UDim2.new(0.28, 0, 0, 0), UDim2.new(0.24, 0, 0, 26),
+        function() return Settings.AutoDrop end,
+        function(v)
+            Settings.AutoDrop = v
+            Drop.save()
+        end)
+    local dropNow = UI.button(page, "Drop sekarang", UDim2.new(0.54, 0, 0, 0), UDim2.new(0.46, 0, 0, 26), UI.C.accent)
+    dropNow.MouseButton1Click:Connect(function()
+        Drop.requestNow()
+    end)
+
+    UI.rowLabel(page, 34, "Daftar drop:")
+    DropListBox = UI.box(page, UDim2.new(0.28, 0, 0, 34), UDim2.new(0.72, 0, 0, 26),
+        Settings.DropList, "Nama fruit, pisah koma")
+
+    UI.rowLabel(page, 68, "Cek tiap (s):")
+    DropIntervalBox = UI.box(page, UDim2.new(0.28, 0, 0, 68), UDim2.new(0.24, 0, 0, 26), Settings.DropInterval)
+    UI.label(page, "item langka / basket / chest tidak pernah di-drop",
+        UDim2.new(0.54, 0, 0, 68), UDim2.new(0.46, 0, 0, 26), UI.C.dim, Enum.Font.Gotham, 10)
+
+    local hint = UI.label(page,
+        "Equip fruit lalu tekan Backspace, hanya di sela farm (bukan saat jalan / fire prompt). Basket di-equip lagi otomatis. Nama harus persis (Kilo / Kilo Kilo no Mi).",
+        UDim2.new(0, 0, 0, 102), UDim2.new(1, 0, 0, 28), UI.C.dim, Enum.Font.Gotham, 10)
+    hint.TextWrapped = true
+    hint.TextYAlignment = Enum.TextYAlignment.Top
 end
 
 -- ---------- Tab: Server (private server + bridge MCP) ----------
@@ -1629,6 +1760,7 @@ local function applySettings()
     local cr = tonumber(ChestTriggerBox.Text)
     local fc = tonumber(FpsCapBox.Text)
     local gi = tonumber(GeppoIntervalBox.Text)
+    local di = tonumber(DropIntervalBox.Text)
     Settings.MerchantItems = MerchantItemsBox.Text
 
     -- Kode private server: simpan ke file/getgenv biar kebaca di main menu
@@ -1639,6 +1771,11 @@ local function applySettings()
     Webhook.Url = Webhook.trim(Webhook.UrlBox.Text)
     Webhook.Rare = Webhook.trim(Webhook.RareBox.Text)
     Webhook.save()
+
+    -- Auto Drop
+    Settings.DropList = Webhook.trim(DropListBox.Text)
+    if di and di >= 3 then Settings.DropInterval = math.floor(di) end
+    Drop.save()
 
     if cr and cr >= 0 then Settings.ChestOpenAt = math.floor(cr) end
     if fc and fc >= 5 then Settings.FpsCap = math.floor(fc) end
@@ -1665,6 +1802,8 @@ local function applySettings()
     ChestTriggerBox.Text = tostring(Settings.ChestOpenAt)
     FpsCapBox.Text = tostring(Settings.FpsCap)
     GeppoIntervalBox.Text = tostring(Settings.GeppoInterval)
+    DropListBox.Text = Settings.DropList
+    DropIntervalBox.Text = tostring(Settings.DropInterval)
     PrivateServer.CodeBox.Text = PrivateServer.Code
     Webhook.UrlBox.Text = Webhook.Url
     Webhook.RareBox.Text = Webhook.Rare
@@ -1685,6 +1824,8 @@ function UI.syncFromSettings()
     FpsCapBox.Text = tostring(Settings.FpsCap)
     GeppoIntervalBox.Text = tostring(Settings.GeppoInterval)
     MerchantItemsBox.Text = Settings.MerchantItems
+    DropListBox.Text = Settings.DropList
+    DropIntervalBox.Text = tostring(Settings.DropInterval)
     for _, refresh in ipairs(UI.Refreshers) do refresh() end
 end
 
@@ -1692,7 +1833,7 @@ ApplyButton.MouseButton1Click:Connect(applySettings)
 
 -- Kotak angka: Enter = apply. Kotak teks panjang (kode / URL): apply tiap fokus lepas
 -- (biasanya di-paste lalu klik di luar).
-for _, box in ipairs({RadiusBox, DurationBox, SpeedBox, TweenSpeedBox, CandyTargetBox, CooldownBox, ChestTriggerBox, FpsCapBox, GeppoIntervalBox}) do
+for _, box in ipairs({RadiusBox, DurationBox, SpeedBox, TweenSpeedBox, CandyTargetBox, CooldownBox, ChestTriggerBox, FpsCapBox, GeppoIntervalBox, DropIntervalBox}) do
     box.FocusLost:Connect(function(enterPressed)
         if enterPressed then applySettings() end
     end)
@@ -1700,6 +1841,7 @@ end
 PrivateServer.CodeBox.FocusLost:Connect(function() applySettings() end)
 Webhook.UrlBox.FocusLost:Connect(function() applySettings() end)
 Webhook.RareBox.FocusLost:Connect(function() applySettings() end)
+DropListBox.FocusLost:Connect(function() applySettings() end)
 MerchantItemsBox.FocusLost:Connect(function()
     Settings.MerchantItems = MerchantItemsBox.Text
 end)
@@ -2243,6 +2385,18 @@ function Nav.computePath(fromPos, toPos, maxVariants, allowPartial)
     return nil, nil, false
 end
 
+-- Catat hitung path yang lambat (>= 120 ms) buat bantu cari sumber freeze
+Nav.computePathRaw = Nav.computePath
+function Nav.computePath(...)
+    local t0 = tick()
+    local a, b, c = Nav.computePathRaw(...)
+    local ms = (tick() - t0) * 1000
+    if ms >= 120 then
+        print(string.format("[AutoEventDoor] LAMBAT: hitung path %.0f ms (%s)", ms, tostring(Nav.lastStatusName)))
+    end
+    return a, b, c
+end
+
 function Nav.pathLength(waypoints)
     local len, prev = 0, RootPart.Position
     for _, w in ipairs(waypoints) do
@@ -2298,17 +2452,28 @@ function Nav.doorGoals(door)
     return goals
 end
 
--- Dari beberapa kandidat tujuan, pilih yang path-nya ada & paling pendek
+-- Dari beberapa kandidat tujuan, pilih yang path-nya ada & wajar.
+-- Hemat CPU: kandidat dicoba dari yang terdekat (garis lurus); kalau path pertama sudah wajar
+-- (gak berputar jauh) sisi satunya TIDAK dihitung. Cuma kalau path pertama gagal / berputar jauh
+-- sisi lain ikut dihitung dan yang terpendek dipakai. (Tiap ComputeAsync bisa bikin hitch.)
 -- Return: goal, waypoints, path
 function Nav.pickGoal(goals)
+    local origin = RootPart.Position
+    local sorted = {}
+    for _, g in ipairs(goals) do table.insert(sorted, g) end
+    table.sort(sorted, function(a, b)
+        return (a - origin).Magnitude < (b - origin).Magnitude
+    end)
+
     local best, bestWps, bestPath, bestLen
-    for _, g in ipairs(goals) do
-        local wps, path = Nav.computePath(RootPart.Position, g, 2)
+    for _, g in ipairs(sorted) do
+        local wps, path = Nav.computePath(origin, g, 2)
         if wps then
             local len = Nav.pathLength(wps)
             if not bestLen or len < bestLen then
                 best, bestWps, bestPath, bestLen = g, wps, path, len
             end
+            if len <= (g - origin).Magnitude * 1.5 + 10 then break end
         end
     end
     return best, bestWps, bestPath
@@ -3326,6 +3491,162 @@ local function ensureBasketEquipped()
     return false
 end
 
+-- ============ Auto Drop fruit ============
+-- Alur: tiap Settings.DropInterval detik (cuma di titik aman mainLoop) cek Backpack/Character.
+-- Fruit yang namanya ada di Settings.DropList -> equip -> tekan Backspace -> cek hilang/berkurang
+-- (maks Drop.Attempts kali; gagal = dilewati 60 detik). Habis satu putaran, basket di-equip lagi.
+-- Pengaman: cocok PERSIS dengan nama di daftar ("Kilo" atau "Kilo Kilo no Mi"), bukan sekadar
+-- mengandung kata (jadi "Heal Potion" aman); item di daftar langka (ping @everyone),
+-- Candy Corn Basket, dan Rare Fruit Chest TIDAK PERNAH di-drop walau salah ketik di daftar.
+function Drop.norm(name)
+    local s = Webhook.baseName(name):lower()
+    s = s:gsub("%s+", " ")
+    return Webhook.trim(s)
+end
+
+function Drop.shouldDrop(name)
+    local n = Drop.norm(name)
+    if n == "" or n == Drop.norm(BASKET_NAME) or n == Drop.norm(CHEST_NAME) then return false end
+    if Webhook.isRare(name) then return false end
+
+    for entry in string.gmatch(Settings.DropList or "", "[^,\n]+") do
+        local cleaned = Webhook.trim(entry):gsub("^%d+%s*[xX]%s+", "")
+        local e = Drop.norm(cleaned)
+        if e ~= "" and (n == e or n == e .. " no mi" or n == e .. " " .. e .. " no mi") then
+            return true
+        end
+    end
+    return false
+end
+
+-- Daftar Tool (Backpack + Character) yang perlu di-drop sekarang
+function Drop.collect()
+    local list, now = {}, tick()
+    local function scan(container)
+        if not container then return end
+        for _, child in ipairs(container:GetChildren()) do
+            if child:IsA("Tool") and (Drop.skipUntil[child] or 0) <= now and Drop.shouldDrop(child.Name) then
+                table.insert(list, child)
+            end
+        end
+    end
+    scan(LocalPlayer:FindFirstChild("Backpack"))
+    scan(LocalPlayer.Character)
+    return list
+end
+
+-- Equip lalu Backspace untuk satu tool. Return: true kalau tool hilang / jumlahnya berkurang
+function Drop.one(tool)
+    local hum = Humanoid
+    if not hum or not hum.Parent then return false end
+
+    local function mine()
+        return tool.Parent == LocalPlayer.Character or tool.Parent == LocalPlayer:FindFirstChild("Backpack")
+    end
+    local before = readToolCount(tool) or 1
+
+    for _ = 1, Drop.Attempts do
+        if not mine() then return true end
+
+        if tool.Parent ~= LocalPlayer.Character then
+            pcall(function() hum:EquipTool(tool) end)
+            local t0 = tick()
+            while tool.Parent ~= LocalPlayer.Character and mine() and (tick() - t0) < 2 do
+                task.wait(0.1)
+            end
+        end
+
+        if tool.Parent == LocalPlayer.Character then
+            task.wait(0.3) -- jeda biar server nganggep tool udah ke-equip
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Backspace, false, game)
+            task.wait(0.08)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Backspace, false, game)
+
+            local t0 = tick()
+            while (tick() - t0) < 1.2 do
+                if not mine() then return true end
+                if (readToolCount(tool) or 1) < before then return true end
+                task.wait(0.1)
+            end
+        end
+        task.wait(0.3)
+    end
+    return false
+end
+
+-- Satu putaran drop. manual = true: dari tombol "Drop sekarang" saat farm OFF.
+-- Return: jumlah fruit yang berhasil di-drop
+function Drop.run(manual)
+    if Drop.running then return 0 end
+    Drop.running = true
+    Drop.manual = manual == true
+
+    local dropped = 0
+    local prev = Stat.snapshot()
+
+    local ok, err = pcall(function()
+        local list = Drop.collect()
+        for i, tool in ipairs(list) do
+            if i > Drop.MaxPerRun then break end
+            if not (Enabled or Drop.manual) then break end -- farm dimatiin di tengah putaran
+
+            waitUntilNotStunned()
+            Stat.set("Auto Drop", string.format("%s  |  %d/%d", tool.Name, i, #list), "work")
+
+            local name = tool.Name
+            if Drop.one(tool) then
+                dropped = dropped + 1
+                Webhook.count("dropped", 1)
+                print("[AutoEventDoor] Drop: " .. name)
+            else
+                Drop.skipUntil[tool] = tick() + 60
+                print("[AutoEventDoor] Drop gagal, dilewati 60 detik: " .. name)
+            end
+            task.wait(Drop.Gap)
+        end
+
+        -- Balikin basket ke tangan (farm butuh basket ter-equip)
+        if dropped > 0 or #list > 0 then ensureBasketEquipped() end
+    end)
+    if not ok then print("[AutoEventDoor] Auto Drop error: " .. tostring(err)) end
+
+    Stat.restore(prev)
+    Drop.running = false
+    Drop.manual = false
+    return dropped
+end
+
+-- Dipanggil mainLoop di titik aman. Return: true kalau barusan menjalankan satu putaran drop.
+function Drop.tick()
+    if Drop.running then return false end
+
+    local requested = Drop.now
+    if not requested then
+        if not Settings.AutoDrop or tick() < Drop.nextAt then return false end
+    end
+    Drop.nextAt = tick() + math.max(Settings.DropInterval, 3)
+    Drop.now = false
+
+    if #Drop.collect() == 0 then
+        if requested then print("[AutoEventDoor] Drop: gak ada fruit di daftar yang perlu di-drop.") end
+        return false
+    end
+
+    Drop.run(false)
+    return true
+end
+
+-- Tombol "Drop sekarang": farm ON -> dijalankan mainLoop di titik aman; farm OFF -> langsung.
+function Drop.requestNow()
+    if Drop.running then return end
+    if Enabled then
+        Drop.now = true
+        print("[AutoEventDoor] Drop: diminta, dijalankan di sela farm...")
+    else
+        task.spawn(Drop.run, true)
+    end
+end
+
 -- ============ Buka Rare Fruit Chest ============
 -- Kalau Rare Fruit Chest >= Settings.ChestOpenAt (default 7), ulang terus:
 --   1) equip tool "Rare Fruit Chest" dari Backpack
@@ -3598,6 +3919,10 @@ local function mainLoop()
         waitUntilNotStunned()
         if not Enabled then break end
 
+        -- "Drop sekarang" manual lagi jalan (farm baru dinyalain di tengah drop): tunggu selesai
+        while Drop.running and Enabled do task.wait(0.2) end
+        if not Enabled then break end
+
         -- Basket harus ter-equip dulu sebelum ngapa-ngapain (cari door / cek candy).
         -- Dicek tiap iterasi, jadi kalau ke-unequip / respawn, otomatis di-equip lagi.
         if not ensureBasketEquipped() then
@@ -3610,6 +3935,12 @@ local function mainLoop()
             continue
         end
         basketWarned = false
+
+        -- Auto Drop fruit: dijalankan DI SINI (titik aman: karakter diam, belum jalan/tween/fire prompt)
+        -- supaya gak bentrok sama farm. Habis drop, iterasi diulang dari awal (basket di-equip lagi).
+        if Drop.tick() then
+            continue
+        end
 
         local tripped = false
 
@@ -3706,6 +4037,8 @@ local function mainLoop()
                         end, "wait")
                     end
                     while Enabled and door.Parent and tick() < getDoorReadyAt(door) do
+                        Drop.tick() -- lagi diam nunggu cooldown = titik aman buat drop
+
                         local candyNow = getCandyCount()
                         if candyNow and candyNow >= Settings.CandyTarget and tick() >= ShopRetryAt then
                             interrupted = true
@@ -4156,6 +4489,16 @@ function Bridge.start()
     end)
 
     if Bridge.Enabled then Bridge.restart() end
+end
+
+-- Dipakai detektor hitch: judul + detail status saat frame lambat
+function Fps.describe()
+    local detail = Stat.detail
+    if Stat.detailFn then
+        local ok, res = pcall(Stat.detailFn)
+        detail = ok and tostring(res or "") or ""
+    end
+    return Stat.title .. (detail ~= "" and (" | " .. detail) or "")
 end
 
 Fps.start()
