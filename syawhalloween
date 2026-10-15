@@ -40,6 +40,8 @@
       Webhook) -> embed emas + ping @everyone
     - Anti-diam: path gagal -> pindah ke ruang terbuka / lompat keluar dari kurungan; door gagal
       beruntun -> lompat keluar (opsional respawn). Diagnosa PathStatus di console
+    - Bridge MCP (opsional, default OFF): hubungkan ke bridge_server.py di komputermu supaya Claude bisa
+      baca status/log & ubah setting (whitelist, tanpa eksekusi kode bebas)
     - FPS Cap: batasi FPS ke 20 (setfpscap) & ditulis ulang tiap detik biar gak balik normal
     - Toggle ON/OFF dengan tombol "," (Comma) atau lewat GUI
     - GUI bertab (Farm / Gerak / Shop / Server); RightShift = sembunyikan/tampilkan GUI
@@ -55,6 +57,19 @@ local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LocalPlayer = Players.LocalPlayer
+
+-- print yang dipakai script ini ikut disimpan ke buffer (dibaca bridge / MCP); print asli tetap jalan.
+local LogBuffer = { lines = {}, max = 200 }
+local rawPrint = print
+local function print(...)
+    rawPrint(...)
+    local parts = {}
+    for i = 1, select("#", ...) do
+        parts[i] = tostring((select(i, ...)))
+    end
+    table.insert(LogBuffer.lines, os.date("%H:%M:%S") .. " " .. table.concat(parts, " "))
+    if #LogBuffer.lines > LogBuffer.max then table.remove(LogBuffer.lines, 1) end
+end
 
 -- ================= Auto Join Private Server (First Sea) =================
 -- Alur (sama kayak hub), dijalankan di MAIN MENU (PlaceId 1730877806):
@@ -1046,6 +1061,53 @@ function Fps.start()
     end)
 end
 
+-- ================= Bridge (MCP) - konfigurasi =================
+-- Menghubungkan script ke server lokal (bridge_server.py) supaya Claude bisa membaca status/log
+-- dan mengatur setting lewat MCP. Defaultnya MATI; isi token (samakan dengan bridge_token.txt)
+-- lalu nyalakan dari tab Server. Logikanya ada di dekat akhir script.
+local Bridge = {
+    ConfigFile = "AutoEventDoor_Bridge.json",
+    Enabled = false,
+    Token = "",
+    Host = "127.0.0.1",
+    Port = 8765,
+    connected = false,
+    transport = "-",
+    lastError = "",
+    gen = 0,
+    outbox = {},
+}
+
+function Bridge.load()
+    pcall(function()
+        if typeof(isfile) == "function" and typeof(readfile) == "function"
+            and isfile(Bridge.ConfigFile) then
+            local data = game:GetService("HttpService"):JSONDecode(readfile(Bridge.ConfigFile))
+            if type(data) == "table" then
+                if type(data.Enabled) == "boolean" then Bridge.Enabled = data.Enabled end
+                if type(data.Token) == "string" then Bridge.Token = Webhook.trim(data.Token) end
+                if type(data.Port) == "number" and data.Port >= 1024 and data.Port <= 65535 then
+                    Bridge.Port = math.floor(data.Port)
+                end
+            end
+        end
+    end)
+end
+
+function Bridge.save()
+    pcall(function()
+        if typeof(writefile) == "function" then
+            writefile(Bridge.ConfigFile, game:GetService("HttpService"):JSONEncode({
+                Enabled = Bridge.Enabled,
+                Token = Bridge.Token,
+                Port = Bridge.Port,
+            }))
+        end
+    end)
+end
+
+Bridge.load()
+
 -- ================= GUI =================
 -- Layout lebar + bertab (Farm / Gerak / Shop / Server) supaya gak panjang ke bawah.
 -- RightShift = sembunyikan / tampilkan GUI. "," = toggle ON/OFF farm.
@@ -1084,6 +1146,7 @@ local UI = {
     },
     Pages = {},
     Tabs = {},
+    Refreshers = {},
 }
 
 function UI.corner(obj, radius)
@@ -1153,6 +1216,7 @@ function UI.toggle(parent, pos, size, get, set, prefix)
         refresh()
     end)
     refresh()
+    table.insert(UI.Refreshers, refresh)
     return btn
 end
 
@@ -1352,7 +1416,7 @@ do
         Settings.MerchantItems, "Nama item, pisah koma")
 end
 
--- ---------- Tab: Server (auto join private server) ----------
+-- ---------- Tab: Server (private server + bridge MCP) ----------
 do
     local page = UI.page("Server")
 
@@ -1366,10 +1430,32 @@ do
             PrivateServer.save()
         end, "Join: ")
 
-    local hint = UI.label(page, "Dipakai saat script dijalankan di MAIN MENU: kirim kode, pilih Regular, lalu konfirmasi First Sea.",
-        UDim2.new(0, 0, 0, 36), UDim2.new(1, 0, 0, 40), UI.C.dim, Enum.Font.Gotham, 11)
-    hint.TextWrapped = true
-    hint.TextYAlignment = Enum.TextYAlignment.Top
+    UI.rowLabel(page, 34, "Bridge token:")
+    Bridge.TokenBox = UI.box(page, UDim2.new(0.28, 0, 0, 34), UDim2.new(0.72, 0, 0, 26),
+        Bridge.Token, "samakan dengan bridge_token.txt")
+    Bridge.TokenBox.FocusLost:Connect(function()
+        local token = Webhook.trim(Bridge.TokenBox.Text)
+        if token ~= Bridge.Token then
+            Bridge.Token = token
+            Bridge.save()
+            Bridge.restart()
+        end
+    end)
+
+    UI.rowLabel(page, 68, "Bridge MCP:")
+    UI.toggle(page, UDim2.new(0.28, 0, 0, 68), UDim2.new(0.24, 0, 0, 26),
+        function() return Bridge.Enabled end,
+        function(v)
+            Bridge.Enabled = v
+            Bridge.Token = Webhook.trim(Bridge.TokenBox.Text)
+            Bridge.save()
+            Bridge.restart()
+        end)
+    Bridge.StatusLabel = UI.label(page, "OFF", UDim2.new(0.54, 0, 0, 68), UDim2.new(0.46, 0, 0, 26),
+        UI.C.dim, Enum.Font.GothamBold, 11)
+
+    UI.label(page, "Join = dipakai di MAIN MENU   |   Bridge = server lokal 127.0.0.1 (MCP)",
+        UDim2.new(0, 0, 0, 102), UDim2.new(1, 0, 0, 26), UI.C.dim, Enum.Font.Gotham, 10)
 end
 
 -- ---------- Tab: Webhook ----------
@@ -1585,6 +1671,21 @@ local function applySettings()
 
     Fps.apply() -- cap baru langsung ditulis
     updateGuiState()
+end
+
+-- Kebalikan applySettings: isi GUI dari Settings (dipakai bridge waktu setting diubah dari luar)
+function UI.syncFromSettings()
+    RadiusBox.Text = tostring(Settings.SearchRadius)
+    DurationBox.Text = tostring(Settings.HoldDuration)
+    SpeedBox.Text = tostring(Settings.WalkSpeed)
+    TweenSpeedBox.Text = tostring(Settings.TweenSpeed)
+    CandyTargetBox.Text = tostring(Settings.CandyTarget)
+    CooldownBox.Text = tostring(Settings.DoorCooldown)
+    ChestTriggerBox.Text = tostring(Settings.ChestOpenAt)
+    FpsCapBox.Text = tostring(Settings.FpsCap)
+    GeppoIntervalBox.Text = tostring(Settings.GeppoInterval)
+    MerchantItemsBox.Text = Settings.MerchantItems
+    for _, refresh in ipairs(UI.Refreshers) do refresh() end
 end
 
 ApplyButton.MouseButton1Click:Connect(applySettings)
@@ -3726,7 +3827,339 @@ task.spawn(function()
     end
 end)
 
+-- ================= Bridge (MCP): logika =================
+-- Claude (lewat bridge_server.py -> MCP) hanya bisa memanggil perintah di Bridge.handle.
+-- TIDAK ada eksekusi kode bebas. Setting dibatasi whitelist + rentang nilai. URL webhook,
+-- kode private server, dan token gak pernah dikirim keluar.
+Bridge.rules = {
+    SearchRadius = { "number", 1, 5000 },
+    HoldDuration = { "number", 0.1, 60 },
+    WalkSpeed = { "number", 1, 500 },
+    WalkSpeedEnabled = { "boolean" },
+    TweenMode = { "boolean" },
+    TweenSpeed = { "number", 1, 500 },
+    CandyTarget = { "int", 1, 100000 },
+    DoorCooldown = { "number", 0, 3600 },
+    ChestOpenAt = { "int", 0, 1000 },
+    AutoMerchant = { "boolean" },
+    MerchantItems = { "string", 200 },
+    GeppoPass = { "boolean" },
+    GeppoInterval = { "number", 0.1, 10 },
+    DoorGeppo = { "boolean" },
+    FpsCapEnabled = { "boolean" },
+    FpsCap = { "int", 5, 240 },
+    StuckRespawn = { "boolean" },
+}
+
+-- Return: true, nilaiBersih  |  false, pesanError
+function Bridge.validate(key, value)
+    local rule = Bridge.rules[key]
+    if not rule then
+        return false, "setting gak dikenal / gak boleh diubah: " .. tostring(key)
+    end
+
+    local kind = rule[1]
+    if kind == "boolean" then
+        if type(value) ~= "boolean" then return false, key .. " harus true/false" end
+        return true, value
+    elseif kind == "string" then
+        if type(value) ~= "string" then return false, key .. " harus teks" end
+        if #value > rule[2] then return false, key .. " terlalu panjang (maks " .. rule[2] .. " karakter)" end
+        return true, value
+    end
+
+    -- number / int
+    if type(value) ~= "number" or value ~= value then return false, key .. " harus angka" end
+    if value < rule[2] or value > rule[3] then
+        return false, string.format("%s di luar rentang %s..%s", key, tostring(rule[2]), tostring(rule[3]))
+    end
+    if kind == "int" then value = math.floor(value) end
+    return true, value
+end
+
+function Bridge.settings()
+    local out = {}
+    for key in pairs(Bridge.rules) do out[key] = Settings[key] end
+    out.farmEnabled = Enabled
+    out.webhookItemNotif = Webhook.Enabled
+    out.webhookSummary = Webhook.SummaryEnabled
+    out.webhookRare = Webhook.Rare
+    return out
+end
+
+function Bridge.setSetting(key, value)
+    local ok, v = Bridge.validate(key, value)
+    if not ok then error(v, 0) end
+
+    Settings[key] = v
+
+    if key == "WalkSpeedEnabled" or key == "WalkSpeed" then
+        if Settings.WalkSpeedEnabled then
+            Humanoid.WalkSpeed = Settings.WalkSpeed
+        elseif key == "WalkSpeedEnabled" then
+            Humanoid.WalkSpeed = 16 -- balikin ke default Roblox
+        end
+    elseif key == "FpsCapEnabled" or key == "FpsCap" then
+        if Settings.FpsCapEnabled then Fps.apply() else Fps.release() end
+    end
+
+    UI.syncFromSettings()
+    print("[AutoEventDoor] Bridge: " .. key .. " = " .. tostring(v))
+    return { key = key, value = v }
+end
+
+function Bridge.snapshot()
+    local detail = Stat.detail
+    if Stat.detailFn then
+        local ok, res = pcall(Stat.detailFn)
+        detail = ok and tostring(res or "") or ""
+    end
+
+    local cooling, now = 0, tick()
+    for door in pairs(LastVisit) do
+        if door.Parent and now < getDoorReadyAt(door) then cooling = cooling + 1 end
+    end
+
+    local pos = RootPart and RootPart.Position
+    return {
+        farmEnabled = Enabled,
+        status = {
+            title = Stat.title, detail = detail, note = Stat.note,
+            kind = Stat.kind, seconds = math.floor(now - Stat.since),
+        },
+        doors = { cooldown = cooling, total = LastKnownDoorCount, failStreak = Nav.failStreak },
+        candy = getCandyCount(),
+        candyTarget = Settings.CandyTarget,
+        chest = getChestCount(),
+        fps = Fps.current,
+        mode = Settings.TweenMode and "tween" or "wasd",
+        health = Humanoid and Humanoid.Health or nil,
+        position = pos and {
+            x = math.floor(pos.X * 10) / 10, y = math.floor(pos.Y * 10) / 10, z = math.floor(pos.Z * 10) / 10,
+        } or nil,
+        place = game.PlaceId,
+        stats = {
+            hourWindow = Webhook.stats.win, total = Webhook.stats.tot,
+            activeSeconds = math.floor(Webhook.active("tot")),
+            sessionSeconds = math.floor(now - Webhook.stats.startedAt),
+        },
+    }
+end
+
+function Bridge.doors()
+    local list, now = {}, tick()
+    for _, door in ipairs(getAllEventDoors()) do
+        local pos = getDoorPosition(door)
+        table.insert(list, {
+            label = doorLabel(door),
+            readyIn = math.max(0, math.floor(getDoorReadyAt(door) - now)),
+            distance = pos and math.floor((RootPart.Position - pos).Magnitude) or nil,
+        })
+        if #list >= 100 then break end
+    end
+    table.sort(list, function(a, b) return (a.distance or 1e9) < (b.distance or 1e9) end)
+    return { count = #list, doors = list }
+end
+
+function Bridge.getLog(n)
+    n = math.clamp(math.floor(tonumber(n) or 50), 1, LogBuffer.max)
+    local lines = LogBuffer.lines
+    local out = {}
+    for i = math.max(1, #lines - n + 1), #lines do table.insert(out, lines[i]) end
+    return { count = #out, lines = out }
+end
+
+-- Satu-satunya pintu masuk perintah dari luar
+function Bridge.handle(cmd, args)
+    args = type(args) == "table" and args or {}
+
+    if cmd == "ping" then
+        return { pong = true, time = os.time() }
+    elseif cmd == "get_status" then
+        return Bridge.snapshot()
+    elseif cmd == "get_settings" then
+        return Bridge.settings()
+    elseif cmd == "set_setting" then
+        return Bridge.setSetting(args.key, args.value)
+    elseif cmd == "set_farm" then
+        setEnabled(args.enabled == true)
+        return { farmEnabled = Enabled }
+    elseif cmd == "get_log" then
+        return Bridge.getLog(args.lines)
+    elseif cmd == "get_inventory" then
+        return Webhook.snapshot()
+    elseif cmd == "get_doors" then
+        return Bridge.doors()
+    elseif cmd == "send_summary" then
+        if not Webhook.valid() then error("URL webhook belum valid", 0) end
+        Webhook.sendSummary(true)
+        return { sent = true }
+    end
+
+    error("perintah gak dikenal: " .. tostring(cmd), 0)
+end
+
+-- ---------- transport ----------
+function Bridge.reply(id, ok, data)
+    local Http = game:GetService("HttpService")
+    local entry = { id = id, ok = ok, data = data }
+
+    local okEnc = pcall(Http.JSONEncode, Http, entry)
+    if not okEnc then
+        entry = { id = id, ok = false, data = "hasil gak bisa di-encode ke JSON" }
+    end
+
+    if Bridge.transport == "ws" and Bridge.ws then
+        entry.type = "result"
+        pcall(function() Bridge.ws:Send(Http:JSONEncode(entry)) end)
+    else
+        table.insert(Bridge.outbox, entry)
+    end
+end
+
+function Bridge.onCommand(msg)
+    if type(msg) ~= "table" or msg.type ~= "cmd" or msg.id == nil then return end
+    task.spawn(function()
+        local ok, res = pcall(Bridge.handle, msg.cmd, msg.args)
+        Bridge.reply(msg.id, ok, ok and res or tostring(res))
+    end)
+end
+
+function Bridge.request(path, body)
+    local req = request or http_request or (syn and syn.request)
+    if typeof(req) ~= "function" then error("executor gak punya request/http_request", 0) end
+    return req({
+        Url = string.format("http://%s:%d%s", Bridge.Host, Bridge.Port, path),
+        Method = "POST",
+        Headers = { ["Content-Type"] = "application/json", ["X-Bridge-Token"] = Bridge.Token },
+        Body = game:GetService("HttpService"):JSONEncode(body),
+    })
+end
+
+-- Cadangan kalau executor gak punya WebSocket: polling HTTP ~1x/detik
+function Bridge.pollLoop(gen)
+    local Http = game:GetService("HttpService")
+    local fails, first = 0, true
+
+    while Bridge.Enabled and Bridge.gen == gen do
+        local results = Bridge.outbox
+        Bridge.outbox = {}
+
+        local okr, res = pcall(Bridge.request, "/poll", {
+            hello = first, user = LocalPlayer.Name, place = game.PlaceId, results = results,
+        })
+
+        if okr and res and res.StatusCode == 200 then
+            first, fails = false, 0
+            Bridge.transport, Bridge.connected, Bridge.lastError = "http", true, ""
+            local okd, data = pcall(Http.JSONDecode, Http, res.Body)
+            if okd and type(data) == "table" and type(data.commands) == "table" then
+                for _, cmd in ipairs(data.commands) do Bridge.onCommand(cmd) end
+            end
+        else
+            for _, r in ipairs(results) do table.insert(Bridge.outbox, r) end
+            fails = fails + 1
+            Bridge.connected = false
+            if okr and res and res.StatusCode == 401 then
+                Bridge.lastError = "token salah"
+                return
+            end
+            if fails >= 3 then return end
+        end
+        task.wait(1)
+    end
+end
+
+function Bridge.run(gen)
+    local Http = game:GetService("HttpService")
+    local backoff = 2
+
+    while Bridge.Enabled and Bridge.gen == gen do
+        local usedWs = false
+
+        if WebSocket and WebSocket.connect then
+            local url = string.format("ws://%s:%d/ws?token=%s", Bridge.Host, Bridge.Port, Http:UrlEncode(Bridge.Token))
+            local okc, ws = pcall(function() return WebSocket.connect(url) end)
+            if okc and ws then
+                usedWs = true
+                Bridge.ws, Bridge.transport, Bridge.connected, Bridge.lastError = ws, "ws", true, ""
+                local closed = false
+
+                ws.OnMessage:Connect(function(raw)
+                    local okd, msg = pcall(Http.JSONDecode, Http, raw)
+                    if okd then Bridge.onCommand(msg) end
+                end)
+                ws.OnClose:Connect(function() closed = true end)
+                pcall(function()
+                    ws:Send(Http:JSONEncode({ type = "hello", user = LocalPlayer.Name, place = game.PlaceId }))
+                end)
+
+                backoff = 2
+                while Bridge.Enabled and Bridge.gen == gen and not closed do
+                    task.wait(0.5)
+                end
+                pcall(function() ws:Close() end)
+                if Bridge.ws == ws then Bridge.ws = nil end
+                Bridge.connected = false
+            end
+        end
+
+        if not usedWs and Bridge.Enabled and Bridge.gen == gen then
+            Bridge.pollLoop(gen)
+        end
+
+        if Bridge.Enabled and Bridge.gen == gen then
+            task.wait(backoff)
+            backoff = math.min(backoff * 2, 15)
+        end
+    end
+
+    if Bridge.gen == gen then Bridge.connected = false end
+end
+
+function Bridge.restart()
+    Bridge.gen = Bridge.gen + 1
+    local gen = Bridge.gen
+
+    if Bridge.ws then
+        pcall(function() Bridge.ws:Close() end)
+        Bridge.ws = nil
+    end
+    Bridge.connected = false
+    Bridge.lastError = ""
+
+    if not Bridge.Enabled then return end
+    if Bridge.Token == "" then
+        Bridge.lastError = "isi token dulu"
+        print("[AutoEventDoor] Bridge: token kosong (samakan dengan bridge_token.txt di folder bridge_server.py).")
+        return
+    end
+    task.spawn(Bridge.run, gen)
+end
+
+function Bridge.start()
+    task.spawn(function()
+        while true do
+            local label = Bridge.StatusLabel
+            if label then
+                if not Bridge.Enabled then
+                    label.Text, label.TextColor3 = "OFF", UI.C.dim
+                elseif Bridge.connected then
+                    label.Text, label.TextColor3 = "Terhubung (" .. Bridge.transport .. ")", UI.C.on
+                else
+                    local why = Bridge.lastError ~= "" and Bridge.lastError or "menunggu server..."
+                    label.Text, label.TextColor3 = why, UI.C.candy
+                end
+            end
+            task.wait(1)
+        end
+    end)
+
+    if Bridge.Enabled then Bridge.restart() end
+end
+
 Fps.start()
 Webhook.start()
+Bridge.start()
 
 print("[AutoEventDoor] Script loaded. Tekan ',' atau klik tombol GUI untuk toggle ON/OFF.")
