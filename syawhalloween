@@ -6143,7 +6143,7 @@ local Settings = {
     WalkSpeed = 16,
     WalkSpeedEnabled = false,
     TweenMode = true,   -- true = gerak pakai tween (BodyVelocity), false = hold WASD
-    TweenSpeed = 40,    -- stud/detik
+    TweenSpeed = 30,    -- stud/detik
     TweenWalk = true,   -- tween "jalan": karakter tetap berdiri & animasi jalan/lari jalan (bukan melayang). OFF = tween lama (melayang)
     CandyTarget = 290,  -- kalau candy >= ini, pergi ke Witch buat beli chest
     DoorCooldown = 180, -- detik, cooldown per door setelah dikunjungi (3 menit)
@@ -6151,7 +6151,6 @@ local Settings = {
     AutoMerchant = false, -- jalan ke Traveling Merchant & beli item pilihan
     MerchantItems = "",   -- nama item, dipisah koma
     GeppoPass = true,   -- spam skill Geppo/Sky Walk selama tween (kayak di source)
-    GeppoInterval = 0.5, -- detik jeda antar Geppo selama tween (0.1 kecepatan, 0.5 lebih natural)
     DoorGeppo = true,       -- sampai di door: tunggu sebentar, Geppo 1x, baru fire prompt
     DoorArriveWait = 0.5,   -- detik nunggu setelah sampai di door sebelum Geppo
     DoorGeppoDelay = 0.3,   -- detik jeda setelah Geppo sebelum fire prompt
@@ -6206,7 +6205,7 @@ end
 
 local StatusText, ToggleButton, ProgressLabel
 
-local SpeedBox, TweenSpeedBox, CandyTargetBox
+local CandyTargetBox
 
 local function hookWalkSpeedEnforcement(hum)
     hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
@@ -6953,7 +6952,7 @@ function Drop.load()
             if type(data) == "table" then
                 if type(data.Enabled) == "boolean" then Settings.AutoDrop = data.Enabled end
                 if type(data.Rarities) == "table" then
-                    local allowed, selected = {Common = true, Epic = true, Rare = true}, {}
+                    local allowed, selected = {Common = true, Epic = true, Legendary = true, Mythical = true, Rare = true}, {}
                     for _, rarity in ipairs(data.Rarities) do
                         if allowed[rarity] and not table.find(selected, rarity) then table.insert(selected, rarity) end
                     end
@@ -7176,7 +7175,7 @@ do
     tabBar.Size = UDim2.new(1, -20, 0, 26)
     tabBar.Parent = MainFrame
 
-    for i, name in ipairs({"Halloween", "Gerak", "Shop", "Drop", "Server", "Webhook"}) do
+    for i, name in ipairs({"Halloween", "Traveling", "Shop", "Drop", "Server", "Webhook"}) do
         local tab = UI.button(tabBar, name, UDim2.new((i - 1) / 6, 0, 0, 0),
             UDim2.new(1 / 6, -4, 1, 0), UI.C.bar, 12)
         tab.MouseButton1Click:Connect(function() UI.select(name) end)
@@ -7200,7 +7199,7 @@ do
     UI.Content = content
 end
 
-local CooldownBox, ChestTriggerBox, FpsCapBox, GeppoIntervalBox, DropIntervalBox
+local CooldownBox, ChestTriggerBox, FpsCapBox, DropIntervalBox
 
 -- ---------- Tab: Halloween ----------
 do
@@ -7220,50 +7219,11 @@ do
         UI.C.dim, Enum.Font.Gotham, 10)
 end
 
--- ---------- Tab: Gerak ----------
+-- ---------- Tab: Traveling ----------
 do
-    local page = UI.page("Gerak")
-
-    UI.rowLabel(page, 0, "WalkSpeed:")
-    SpeedBox = UI.box(page, UDim2.new(0.28, 0, 0, 0), UDim2.new(0.24, 0, 0, 26), Settings.WalkSpeed)
-    UI.toggle(page, UDim2.new(0.54, 0, 0, 0), UDim2.new(0.22, 0, 0, 26),
-        function() return Settings.WalkSpeedEnabled end,
-        function(v)
-            Settings.WalkSpeedEnabled = v
-            if v then
-                local s = tonumber(SpeedBox.Text)
-                if s and s > 0 then
-                    Settings.WalkSpeed = s
-                    Humanoid.WalkSpeed = s
-                end
-            else
-                Humanoid.WalkSpeed = 16 -- balikin ke default Roblox
-            end
-        end)
-
-    UI.rowLabel(page, 34, "Tween Speed:")
-    TweenSpeedBox = UI.box(page, UDim2.new(0.28, 0, 0, 34), UDim2.new(0.24, 0, 0, 26), Settings.TweenSpeed)
-    UI.toggle(page, UDim2.new(0.54, 0, 0, 34), UDim2.new(0.22, 0, 0, 26),
-        function() return Settings.TweenMode end,
-        function(v) Settings.TweenMode = v end)
-    UI.toggle(page, UDim2.new(0.78, 0, 0, 34), UDim2.new(0.22, 0, 0, 26),
-        function() return Settings.TweenWalk end,
-        function(v) Settings.TweenWalk = v end, "Jalan: ")
-
-    UI.rowLabel(page, 68, "Geppo tween:")
-    UI.toggle(page, UDim2.new(0.28, 0, 0, 68), UDim2.new(0.24, 0, 0, 26),
-        function() return Settings.GeppoPass end,
-        function(v) Settings.GeppoPass = v end)
-    GeppoIntervalBox = UI.box(page, UDim2.new(0.54, 0, 0, 68), UDim2.new(0.22, 0, 0, 26), Settings.GeppoInterval)
-    UI.label(page, "detik / geppo", UDim2.new(0.78, 0, 0, 68), UDim2.new(0.22, 0, 0, 26),
-        UI.C.dim, Enum.Font.Gotham, 10)
-
-    UI.rowLabel(page, 102, "Respawn stuck:")
-    UI.toggle(page, UDim2.new(0.28, 0, 0, 102), UDim2.new(0.24, 0, 0, 26),
-        function() return Settings.StuckRespawn end,
-        function(v) Settings.StuckRespawn = v end)
-    UI.label(page, "reset karakter jika 6 door gagal beruntun",
-        UDim2.new(0.54, 0, 0, 102), UDim2.new(0.46, 0, 0, 26), UI.C.dim, Enum.Font.Gotham, 10)
+    local page = UI.page("Traveling")
+    UI.label(page, "Pilih tujuan dan atur Island Travel di tab ini.",
+        UDim2.new(0, 0, 0, 0), UDim2.new(1, 0, 0, 30), UI.C.dim, Enum.Font.Gotham, 11)
 end
 
 -- ---------- Tab: Shop ----------
@@ -7495,13 +7455,10 @@ local function updateGuiState()
 end
 
 local function applySettings()
-    local s = tonumber(SpeedBox.Text)
-    local ts = tonumber(TweenSpeedBox.Text)
     local ct = tonumber(CandyTargetBox.Text)
     local cd = tonumber(CooldownBox.Text)
     local cr = tonumber(ChestTriggerBox.Text)
     local fc = tonumber(FpsCapBox.Text)
-    local gi = tonumber(GeppoIntervalBox.Text)
     local di = tonumber(DropIntervalBox.Text)
 
     -- Kode private server: simpan ke file/getgenv biar kebaca di main menu
@@ -7519,25 +7476,14 @@ local function applySettings()
 
     if cr and cr >= 0 then Settings.ChestOpenAt = math.floor(cr) end
     if fc and fc >= 5 then Settings.FpsCap = math.floor(fc) end
-    if gi and gi >= 0.1 then Settings.GeppoInterval = gi end
 
-    if ts and ts > 0 then Settings.TweenSpeed = ts end
     if ct and ct > 0 then Settings.CandyTarget = math.floor(ct) end
     if cd and cd >= 0 then Settings.DoorCooldown = cd end
-    if s and s > 0 then
-        Settings.WalkSpeed = s
-        if Settings.WalkSpeedEnabled then
-            Humanoid.WalkSpeed = s
-        end
-    end
 
-    SpeedBox.Text = tostring(Settings.WalkSpeed)
-    TweenSpeedBox.Text = tostring(Settings.TweenSpeed)
     CandyTargetBox.Text = tostring(Settings.CandyTarget)
     CooldownBox.Text = tostring(Settings.DoorCooldown)
     ChestTriggerBox.Text = tostring(Settings.ChestOpenAt)
     FpsCapBox.Text = tostring(Settings.FpsCap)
-    GeppoIntervalBox.Text = tostring(Settings.GeppoInterval)
     DropIntervalBox.Text = tostring(Settings.DropInterval)
     PrivateServer.CodeBox.Text = PrivateServer.Code
     Webhook.UrlBox.Text = Webhook.Url
@@ -7549,7 +7495,7 @@ end
 
 -- Kotak angka: Enter = apply. Kotak teks panjang (kode / URL): apply tiap fokus lepas
 -- (biasanya di-paste lalu klik di luar).
-for _, box in ipairs({SpeedBox, TweenSpeedBox, CandyTargetBox, CooldownBox, ChestTriggerBox, FpsCapBox, GeppoIntervalBox, DropIntervalBox}) do
+for _, box in ipairs({CandyTargetBox, CooldownBox, ChestTriggerBox, FpsCapBox, DropIntervalBox}) do
     box.FocusLost:Connect(function(enterPressed)
         if enterPressed then applySettings() end
     end)
@@ -7573,7 +7519,7 @@ UI.MacWindow = MacLib:Window({
 UI.MacGroup = UI.MacWindow:TabGroup()
 UI.MacTabs = {
     Farm = UI.MacGroup:Tab({Name = "Halloween"}),
-    Gerak = UI.MacGroup:Tab({Name = "Gerak"}),
+    Traveling = UI.MacGroup:Tab({Name = "Traveling"}),
     Shop = UI.MacGroup:Tab({Name = "Shop"}),
     Drop = UI.MacGroup:Tab({Name = "Drop"}),
     Server = UI.MacGroup:Tab({Name = "Server"}),
@@ -7621,28 +7567,7 @@ UI.MacToggle(UI.MacSections.Farm, "FPS Cap aktif", function() return Settings.Fp
         if value then Fps.apply() else Fps.release() end
     end)
 
-UI.MacSections.Gerak:Header({Name = "Movement"})
-UI.MacInput(UI.MacSections.Gerak, "WalkSpeed", SpeedBox)
-UI.MacToggle(UI.MacSections.Gerak, "WalkSpeed aktif", function() return Settings.WalkSpeedEnabled end,
-    function(value)
-        Settings.WalkSpeedEnabled = value
-        if value then
-            local speed = tonumber(SpeedBox.Text)
-            if speed and speed > 0 then Settings.WalkSpeed = speed; Humanoid.WalkSpeed = speed end
-        else
-            Humanoid.WalkSpeed = 16
-        end
-    end)
-UI.MacInput(UI.MacSections.Gerak, "Tween Speed", TweenSpeedBox)
-UI.MacToggle(UI.MacSections.Gerak, "Tween Mode", function() return Settings.TweenMode end,
-    function(value) Settings.TweenMode = value end)
-UI.MacToggle(UI.MacSections.Gerak, "Tween Walk", function() return Settings.TweenWalk end,
-    function(value) Settings.TweenWalk = value end)
-UI.MacToggle(UI.MacSections.Gerak, "Geppo Pass", function() return Settings.GeppoPass end,
-    function(value) Settings.GeppoPass = value end)
-UI.MacInput(UI.MacSections.Gerak, "Geppo Interval", GeppoIntervalBox)
-UI.MacToggle(UI.MacSections.Gerak, "Respawn jika stuck", function() return Settings.StuckRespawn end,
-    function(value) Settings.StuckRespawn = value end)
+UI.MacSections.Traveling:Header({Name = "Traveling"})
 
 -- Standalone island tween modeled on Tensen's BodyVelocity/BodyGyro mover.
 -- It keeps its speed/toggle independent from the movement settings used by the farm.
@@ -7710,34 +7635,25 @@ do
         end
 
         local size = part.Size
-        local wallTop = part.Position.Y + size.Y / 2
+        local cf = part.CFrame
+        local wallTop = part.Position.Y
+            + math.abs(cf.RightVector.Y) * size.X / 2
+            + math.abs(cf.UpVector.Y) * size.Y / 2
+            + math.abs(cf.LookVector.Y) * size.Z / 2
+        local neededY = wallTop + math.max(root.Size.Y / 2 + 1.5, 3)
+        if neededY <= root.Position.Y + 1 then return nil end
         local ceilingParams = RaycastParams.new()
         ceilingParams.FilterType = Enum.RaycastFilterType.Exclude
         ceilingParams.FilterDescendantsInstances = {root.Parent}
-        local ceiling = workspace:Raycast(root.Position, Vector3.new(0, 80, 0), ceilingParams)
-        if ceiling and ceiling.Position.Y - wallTop <= 3 then return nil end
+        local ceiling = workspace:Raycast(root.Position, Vector3.new(0, neededY - root.Position.Y + 2, 0), ceilingParams)
+        if ceiling and ceiling.Position.Y <= neededY + 1 then return nil end
 
-        local landingY = math.max(wallTop, root.Position.Y) + 60
-        if ceiling then landingY = math.min(landingY, ceiling.Position.Y - 1) end
-        local throughWall = root.Position - normal * 4
-        local groundHit = workspace:Raycast(
-            Vector3.new(throughWall.X, landingY, throughWall.Z),
-            Vector3.new(0, -400, 0),
-            raycastParams
-        )
-        local landing = groundHit and groundHit.Position + Vector3.new(0, 4, 0)
-            or Vector3.new(throughWall.X, wallTop + 4, throughWall.Z)
-        if ceiling and landing.Y > ceiling.Position.Y - 2 then
-            landing = Vector3.new(landing.X, math.max(root.Position.Y, ceiling.Position.Y - 3), landing.Z)
-        end
-
-        local cf = part.CFrame
         local projectedDepth = math.abs(direction:Dot(cf.RightVector)) * size.X / 2
             + math.abs(direction:Dot(cf.LookVector)) * size.Z / 2
         return {
             point = hit.Position,
             direction = direction,
-            position = landing,
+            clearanceY = neededY,
             depth = math.max(projectedDepth + 6, 8),
         }
     end
@@ -7754,38 +7670,27 @@ do
             target = target,
             islandName = islandName,
             startedAt = tick(),
-            originalCollision = {},
             platformStand = humanoid.PlatformStand,
             autoRotate = humanoid.AutoRotate,
-            lastProgressAt = tick(),
-            lastFlatPosition = Vector3.new(root.Position.X, 0, root.Position.Z),
         }
         local ok, result = pcall(function()
             local gyro = Instance.new("BodyGyro")
             gyro.Name = "RaizooIslandTweenGyro"
             gyro.P = 200000
             gyro.D = 1000
-            gyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+            gyro.MaxTorque = Vector3.new(0, 1e9, 0)
             gyro.CFrame = root.CFrame
             gyro.Parent = root
             motion.gyro = gyro
 
             local velocity = Instance.new("BodyVelocity")
             velocity.Name = "RaizooIslandTweenVelocity"
-            velocity.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+            -- Normal travel only pushes horizontally, so gravity and floor collision keep
+            -- the character grounded. Vertical force is enabled only while clearing a wall.
+            velocity.MaxForce = Vector3.new(1e9, 0, 1e9)
             velocity.Velocity = Vector3.zero
             velocity.Parent = root
             motion.velocity = velocity
-
-            local function makeNoClip(part)
-                if part:IsA("BasePart") and motion.originalCollision[part] == nil then
-                    motion.originalCollision[part] = part.CanCollide
-                    part.CanCollide = false
-                end
-            end
-            for _, part in ipairs(character:GetDescendants()) do makeNoClip(part) end
-            motion.addedConnection = character.DescendantAdded:Connect(makeNoClip)
-            humanoid.PlatformStand = true
             humanoid.AutoRotate = false
         end)
         if not ok then
@@ -7809,70 +7714,59 @@ do
                 return
             end
 
-            local now = tick()
             local flatPosition = Vector3.new(root.Position.X, 0, root.Position.Z)
-            if (flatPosition - motion.lastFlatPosition).Magnitude > 4 then
-                motion.lastFlatPosition = flatPosition
-                motion.lastProgressAt = now
-            elseif now - motion.lastProgressAt > 1.5 then
-                -- Tensen enters a short climb phase after flat movement stalls.
-                motion.climbUntil = now + 0.6
-                motion.stuckClimbY = root.Position.Y + 10
-                motion.lastProgressAt = now
-            end
-
             local delta = target.Position - root.Position
-            local distance = delta.Magnitude
-            if distance <= 5 then
-                if distance > 0.25 then root.CFrame = target end
+            local flatDelta = Vector3.new(delta.X, 0, delta.Z)
+            if flatDelta.Magnitude <= 5 then
                 Travel.finishTween(motion, true)
                 return
             end
 
-            local flatDelta = Vector3.new(delta.X, 0, delta.Z)
             local flatDirection = flatDelta.Magnitude > 0.01 and flatDelta.Unit
                 or Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z)
             if flatDirection.Magnitude <= 0.01 then flatDirection = Vector3.new(0, 0, -1) end
             flatDirection = flatDirection.Unit
             local look = Vector3.new(flatDirection.X, 0, flatDirection.Z)
             local right = Vector3.new(-look.Z, 0, look.X)
-            local reach = math.max(5, Travel.Speed * dt * 2.5)
-            local sideReach = math.max(3, reach - 2)
-            local origin = root.Position
-            local hit
-            for _, ray in ipairs({
-                {origin, look * reach},
-                {origin + right * 1.5, look * sideReach},
-                {origin - right * 1.5, look * sideReach},
-                {origin + Vector3.new(0, 1.5, 0), look * sideReach},
-                {origin - Vector3.new(0, 1.5, 0), look * sideReach},
-            }) do
-                hit = workspace:Raycast(ray[1], ray[2], raycastParams)
-                if hit then break end
-            end
-            if hit then
-                local landing = Travel.obstacleLanding(root, hit, look, raycastParams)
-                if landing then
-                    motion.climb = landing
-                    root.CFrame = CFrame.new(landing.position) * root.CFrame.Rotation
+            if motion.climb then
+                local climb = motion.climb
+                local progress = (flatPosition - Vector3.new(climb.point.X, 0, climb.point.Z))
+                    :Dot(climb.direction)
+                if progress > climb.depth then
+                    motion.climb = nil
+                    motion.velocity.MaxForce = Vector3.new(1e9, 0, 1e9)
                 end
             end
 
-            local desiredY = target.Position.Y
-            if motion.climb then
-                local progress = (flatPosition - Vector3.new(motion.climb.point.X, 0, motion.climb.point.Z))
-                    :Dot(motion.climb.direction)
-                if progress <= motion.climb.depth then
-                    desiredY = math.max(desiredY, motion.climb.position.Y)
-                else
-                    motion.climb = nil
+            if not motion.climb then
+                -- Back the rays away from the root so a wall touching the character
+                -- is still detected; sample higher points for tall house walls.
+                local reach = math.max(10, Travel.Speed * dt * 2.5 + 4)
+                local scanOrigin = root.Position - look * 4
+                local obstacle
+                for _, ray in ipairs({
+                    {scanOrigin, look * reach},
+                    {scanOrigin + right * 1.5, look * reach},
+                    {scanOrigin - right * 1.5, look * reach},
+                    {scanOrigin + Vector3.new(0, 4, 0), look * reach},
+                    {scanOrigin + Vector3.new(0, 8, 0), look * reach},
+                    {scanOrigin + Vector3.new(0, 12, 0), look * reach},
+                }) do
+                    local hit = workspace:Raycast(ray[1], ray[2], raycastParams)
+                    if hit then
+                        obstacle = Travel.obstacleLanding(root, hit, look, raycastParams)
+                        if obstacle then break end
+                    end
                 end
-            end
-            if now < (motion.climbUntil or 0) then
-                desiredY = math.max(desiredY, motion.stuckClimbY or root.Position.Y)
-            end
-            if math.abs(desiredY - root.Position.Y) > 2 then
-                root.CFrame = CFrame.new(root.Position.X, desiredY, root.Position.Z) * root.CFrame.Rotation
+
+                if obstacle then
+                    motion.climb = obstacle
+                    root.CFrame = CFrame.new(root.Position.X, obstacle.clearanceY, root.Position.Z)
+                        * root.CFrame.Rotation
+                    root.AssemblyLinearVelocity = Vector3.new(
+                        root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z)
+                    motion.velocity.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+                end
             end
 
             motion.velocity.Velocity = look * Travel.Speed
@@ -8009,8 +7903,8 @@ do
     end
 end
 
-UI.MacSections.Gerak:Header({Name = "Island Travel (Tween gaya Tensen)"})
-UI.MacState.IslandTravel = UI.MacSections.Gerak:Label({Text = "Island Travel: nonaktif"})
+UI.MacSections.Traveling:Header({Name = "Island Travel (Tween gaya Tensen)"})
+UI.MacState.IslandTravel = UI.MacSections.Traveling:Label({Text = "Island Travel: nonaktif"})
 local islandTravelOptions = {"None"}
 do
     local seen = {None = true}
@@ -8033,7 +7927,7 @@ do
         return a < b
     end)
 end
-UI.MacState.IslandTravelDropdown = UI.MacSections.Gerak:Dropdown({
+UI.MacState.IslandTravelDropdown = UI.MacSections.Traveling:Dropdown({
     Name = "Select Island",
     Options = islandTravelOptions,
     Default = "None",
@@ -8043,12 +7937,12 @@ UI.MacState.IslandTravelDropdown = UI.MacSections.Gerak:Dropdown({
         if UI.IslandTravel.Enabled then UI.IslandTravel.stopOwnedTween() end
     end,
 }, "IslandTravelDestination")
-UI.MacButton(UI.MacSections.Gerak, "Refresh Island List", UI.IslandTravel.refreshOptions)
-UI.MacToggle(UI.MacSections.Gerak, "Tween To Island", function() return UI.IslandTravel.Enabled end,
+UI.MacButton(UI.MacSections.Traveling, "Refresh Island List", UI.IslandTravel.refreshOptions)
+UI.MacToggle(UI.MacSections.Traveling, "Tween To Island", function() return UI.IslandTravel.Enabled end,
     function(value)
         if value then UI.IslandTravel.start() else UI.IslandTravel.stop() end
     end)
-UI.MacSections.Gerak:Slider({
+UI.MacSections.Traveling:Slider({
     Name = "Island Tween Speed",
     Minimum = 10,
     Maximum = 200,
@@ -8114,11 +8008,11 @@ UI.MacState.DropRarities = UI.MacSections.Drop:Dropdown({
     Name = "Rarity yang di-drop",
     Search = false,
     Multi = true,
-    Options = {"Common", "Epic", "Rare"},
+    Options = {"Common", "Epic", "Legendary", "Mythical", "Rare"},
     Default = Settings.DropRarities,
     Callback = function(selected)
         local ordered, selectedSet = {}, selected or {}
-        for _, rarity in ipairs({"Common", "Epic", "Rare"}) do
+        for _, rarity in ipairs({"Common", "Epic", "Legendary", "Mythical", "Rare"}) do
             if selectedSet[rarity] then table.insert(ordered, rarity) end
         end
         Settings.DropRarities = ordered
@@ -8126,7 +8020,7 @@ UI.MacState.DropRarities = UI.MacSections.Drop:Dropdown({
     end,
 }, "DropRarities")
 UI.MacInput(UI.MacSections.Drop, "Cek tiap (s)", DropIntervalBox)
-UI.MacSections.Drop:Label({Text = "Pilih Common, Epic, dan/atau Rare dari ToolDesc.Fruits."})
+UI.MacSections.Drop:Label({Text = "Pilih rarity dari ReplicatedStorage.Modules.ToolDesc.Fruits."})
 
 UI.MacSections.Server:Header({Name = "Private Server"})
 UI.MacInput(UI.MacSections.Server, "Private Code", PrivateServer.CodeBox)
@@ -8999,7 +8893,7 @@ function Nav.tweenAlong(points, timeout, isDone, state, jumps)
         task.spawn(function()
             while tweening and Enabled do
                 fireGeppoOnce()
-                task.wait(math.max(Settings.GeppoInterval or 0.5, 0.1))
+                task.wait(math.random(5, 7) / 10)
             end
         end)
     end
@@ -9890,7 +9784,7 @@ function Drop.refreshFruitCatalog()
     local fruits = ReplicatedStorage:FindFirstChild("Modules")
     fruits = fruits and fruits:FindFirstChild("ToolDesc")
     fruits = fruits and fruits:FindFirstChild("Fruits")
-    local catalog = {Common = {}, Epic = {}, Rare = {}}
+    local catalog = {Common = {}, Epic = {}, Legendary = {}, Mythical = {}, Rare = {}}
     if fruits then
         for rarity in pairs(catalog) do
             local folder = fruits:FindFirstChild(rarity)
