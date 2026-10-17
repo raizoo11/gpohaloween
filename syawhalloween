@@ -6158,8 +6158,8 @@ local Settings = {
     FpsCapEnabled = true,   -- batasi FPS (setfpscap) & tulis ulang terus
     FpsCap = 20,            -- batas FPS
     StuckRespawn = false,   -- 6 door gagal berturut-turut -> reset karakter (mati & respawn) sebagai jalan terakhir
-    AutoDrop = false,       -- drop otomatis fruit di DropList (equip + Backspace), cuma di sela farm. Default MATI
-    DropList = "Kilo, Suke, Spin, Heal, Bari, Mero, Horo, Gomu, Bomu, Yomi, Spring, Kira",
+    AutoDrop = false,       -- drop otomatis fruit dari rarity terpilih (equip + Backspace), cuma di sela farm. Default MATI
+    DropRarities = {"Common"},
     DropInterval = 10,      -- detik antar pengecekan Backpack buat fruit yang perlu di-drop
 }
 
@@ -6455,7 +6455,7 @@ function Webhook.load()
         if typeof(isfile) == "function" and typeof(readfile) == "function"
             and isfile(Webhook.ConfigFile) then
             local data = game:GetService("HttpService"):JSONDecode(readfile(Webhook.ConfigFile))
-            if type(data) == "table" then
+    if type(data) == "table" then
                 if type(data.Enabled) == "boolean" then Webhook.Enabled = data.Enabled end
                 if type(data.Summary) == "boolean" then Webhook.SummaryEnabled = data.Summary end
                 if type(data.Rare) == "string" then
@@ -6930,7 +6930,7 @@ function Fps.start()
 end
 
 -- ================= Auto Drop fruit - konfigurasi =================
--- Equip fruit yang ada di Settings.DropList lalu tekan Backspace (drop bawaan game). Logikanya ada
+-- Equip fruit dari kategori rarity terpilih lalu tekan Backspace (drop bawaan game). Logikanya ada
 -- di dekat bagian "Equip Candy Corn Basket" dan dipanggil mainLoop di TITIK AMAN (karakter lagi
 -- diam: sebelum cari door / saat nunggu cooldown), jadi gak bentrok sama gerak, fire prompt, atau
 -- basket. Default MATI; pengaturan tersimpan ke file.
@@ -6952,8 +6952,12 @@ function Drop.load()
             local data = game:GetService("HttpService"):JSONDecode(readfile(Drop.ConfigFile))
             if type(data) == "table" then
                 if type(data.Enabled) == "boolean" then Settings.AutoDrop = data.Enabled end
-                if type(data.List) == "string" and Webhook.trim(data.List) ~= "" then
-                    Settings.DropList = Webhook.trim(data.List)
+                if type(data.Rarities) == "table" then
+                    local allowed, selected = {Common = true, Epic = true, Rare = true}, {}
+                    for _, rarity in ipairs(data.Rarities) do
+                        if allowed[rarity] and not table.find(selected, rarity) then table.insert(selected, rarity) end
+                    end
+                    Settings.DropRarities = selected
                 end
                 if type(data.Interval) == "number" and data.Interval >= 3 then
                     Settings.DropInterval = math.floor(data.Interval)
@@ -6968,7 +6972,7 @@ function Drop.save()
         if typeof(writefile) == "function" then
             writefile(Drop.ConfigFile, game:GetService("HttpService"):JSONEncode({
                 Enabled = Settings.AutoDrop,
-                List = Settings.DropList,
+                Rarities = Settings.DropRarities,
                 Interval = Settings.DropInterval,
             }))
         end
@@ -7196,7 +7200,7 @@ do
     UI.Content = content
 end
 
-local CooldownBox, ChestTriggerBox, MerchantItemsBox, FpsCapBox, GeppoIntervalBox, DropListBox, DropIntervalBox
+local CooldownBox, ChestTriggerBox, FpsCapBox, GeppoIntervalBox, DropIntervalBox
 
 -- ---------- Tab: Halloween ----------
 do
@@ -7275,9 +7279,6 @@ do
         function() return Settings.AutoMerchant end,
         function(v) Settings.AutoMerchant = v end)
 
-    UI.rowLabel(page, 68, "Item merchant:")
-    MerchantItemsBox = UI.box(page, UDim2.new(0.28, 0, 0, 68), UDim2.new(0.72, 0, 0, 26),
-        Settings.MerchantItems, "Nama item, pisah koma")
 end
 
 -- ---------- Tab: Drop (auto drop fruit) ----------
@@ -7296,14 +7297,10 @@ do
         Drop.requestNow()
     end)
 
-    UI.rowLabel(page, 34, "Daftar drop:")
-    DropListBox = UI.box(page, UDim2.new(0.28, 0, 0, 34), UDim2.new(0.72, 0, 0, 26),
-        Settings.DropList, "Nama fruit, pisah koma")
-
-    UI.rowLabel(page, 68, "Cek tiap (s):")
-    DropIntervalBox = UI.box(page, UDim2.new(0.28, 0, 0, 68), UDim2.new(0.24, 0, 0, 26), Settings.DropInterval)
-    UI.label(page, "item langka / basket / chest tidak pernah di-drop",
-        UDim2.new(0.54, 0, 0, 68), UDim2.new(0.46, 0, 0, 26), UI.C.dim, Enum.Font.Gotham, 10)
+    UI.rowLabel(page, 34, "Cek tiap (s):")
+    DropIntervalBox = UI.box(page, UDim2.new(0.28, 0, 0, 34), UDim2.new(0.24, 0, 0, 26), Settings.DropInterval)
+    UI.label(page, "Pilih rarity Common / Epic / Rare di dropdown.",
+        UDim2.new(0.54, 0, 0, 34), UDim2.new(0.46, 0, 0, 26), UI.C.dim, Enum.Font.Gotham, 10)
 
     local hint = UI.label(page,
         "Equip fruit lalu tekan Backspace, hanya di sela farm (bukan saat jalan / fire prompt). Basket di-equip lagi otomatis. Nama harus persis (Kilo / Kilo Kilo no Mi).",
@@ -7506,7 +7503,6 @@ local function applySettings()
     local fc = tonumber(FpsCapBox.Text)
     local gi = tonumber(GeppoIntervalBox.Text)
     local di = tonumber(DropIntervalBox.Text)
-    Settings.MerchantItems = MerchantItemsBox.Text
 
     -- Kode private server: simpan ke file/getgenv biar kebaca di main menu
     PrivateServer.Code = PrivateServer.CodeBox.Text:match("^%s*(.-)%s*$") or ""
@@ -7518,7 +7514,6 @@ local function applySettings()
     Webhook.save()
 
     -- Auto Drop
-    Settings.DropList = Webhook.trim(DropListBox.Text)
     if di and di >= 3 then Settings.DropInterval = math.floor(di) end
     Drop.save()
 
@@ -7543,7 +7538,6 @@ local function applySettings()
     ChestTriggerBox.Text = tostring(Settings.ChestOpenAt)
     FpsCapBox.Text = tostring(Settings.FpsCap)
     GeppoIntervalBox.Text = tostring(Settings.GeppoInterval)
-    DropListBox.Text = Settings.DropList
     DropIntervalBox.Text = tostring(Settings.DropInterval)
     PrivateServer.CodeBox.Text = PrivateServer.Code
     Webhook.UrlBox.Text = Webhook.Url
@@ -7563,10 +7557,6 @@ end
 PrivateServer.CodeBox.FocusLost:Connect(function() applySettings() end)
 Webhook.UrlBox.FocusLost:Connect(function() applySettings() end)
 Webhook.RareBox.FocusLost:Connect(function() applySettings() end)
-DropListBox.FocusLost:Connect(function() applySettings() end)
-MerchantItemsBox.FocusLost:Connect(function()
-    Settings.MerchantItems = MerchantItemsBox.Text
-end)
 
 -- ================= MacLib UI =================
 -- MacLib is bundled above the project script in this file.
@@ -8074,15 +8064,69 @@ UI.MacSections.Shop:Header({Name = "Shop"})
 UI.MacInput(UI.MacSections.Shop, "Buka Chest di candy", ChestTriggerBox)
 UI.MacToggle(UI.MacSections.Shop, "Auto Merchant", function() return Settings.AutoMerchant end,
     function(value) Settings.AutoMerchant = value end)
-UI.MacInput(UI.MacSections.Shop, "Item Merchant", MerchantItemsBox, "Pisahkan nama dengan koma")
+local function getMerchantToolOptions()
+    local root = ReplicatedStorage:FindFirstChild("Tools")
+    local options, seen = {}, {}
+    if not root then return options end
+    for _, item in ipairs(root:GetDescendants()) do
+        if item:IsA("Tool") and not seen[item.Name] then
+            seen[item.Name] = true
+            table.insert(options, item.Name)
+        end
+    end
+    if #options == 0 then
+        for _, item in ipairs(root:GetChildren()) do
+            if not item:IsA("Folder") and not seen[item.Name] then
+                seen[item.Name] = true
+                table.insert(options, item.Name)
+            end
+        end
+    end
+    table.sort(options)
+    return options
+end
+
+local merchantDefaults = {}
+for itemName in string.gmatch(Settings.MerchantItems or "", "[^,]+") do
+    table.insert(merchantDefaults, Webhook.trim(itemName))
+end
+UI.MacState.MerchantItems = UI.MacSections.Shop:Dropdown({
+    Name = "Item Merchant",
+    Search = true,
+    Multi = true,
+    Options = getMerchantToolOptions(),
+    Default = merchantDefaults,
+    Callback = function(selected)
+        local names = {}
+        for name, enabled in pairs(selected or {}) do
+            if enabled then table.insert(names, name) end
+        end
+        table.sort(names)
+        Settings.MerchantItems = table.concat(names, ", ")
+    end,
+}, "MerchantItems")
 
 UI.MacSections.Drop:Header({Name = "Auto Drop"})
 UI.MacToggle(UI.MacSections.Drop, "Auto Drop", function() return Settings.AutoDrop end,
     function(value) Settings.AutoDrop = value; Drop.save() end)
 UI.MacButton(UI.MacSections.Drop, "Drop sekarang", function() Drop.requestNow() end)
-UI.MacInput(UI.MacSections.Drop, "Daftar drop", DropListBox, "Nama item, pisah koma")
+UI.MacState.DropRarities = UI.MacSections.Drop:Dropdown({
+    Name = "Rarity yang di-drop",
+    Search = false,
+    Multi = true,
+    Options = {"Common", "Epic", "Rare"},
+    Default = Settings.DropRarities,
+    Callback = function(selected)
+        local ordered, selectedSet = {}, selected or {}
+        for _, rarity in ipairs({"Common", "Epic", "Rare"}) do
+            if selectedSet[rarity] then table.insert(ordered, rarity) end
+        end
+        Settings.DropRarities = ordered
+        Drop.save()
+    end,
+}, "DropRarities")
 UI.MacInput(UI.MacSections.Drop, "Cek tiap (s)", DropIntervalBox)
-UI.MacSections.Drop:Label({Text = "Item langka, basket, dan chest tidak akan di-drop."})
+UI.MacSections.Drop:Label({Text = "Pilih Common, Epic, dan/atau Rare dari ToolDesc.Fruits."})
 
 UI.MacSections.Server:Header({Name = "Private Server"})
 UI.MacInput(UI.MacSections.Server, "Private Code", PrivateServer.CodeBox)
@@ -9831,27 +9875,57 @@ end
 
 -- ============ Auto Drop fruit ============
 -- Alur: tiap Settings.DropInterval detik (cuma di titik aman mainLoop) cek Backpack/Character.
--- Fruit yang namanya ada di Settings.DropList -> equip -> tekan Backspace -> cek hilang/berkurang
+-- Fruit dengan nama yang cocok di ReplicatedStorage.Modules.ToolDesc.Fruits -> equip -> Backspace
 -- (maks Drop.Attempts kali; gagal = dilewati 60 detik). Habis satu putaran, basket di-equip lagi.
--- Pengaman: cocok PERSIS dengan nama di daftar ("Kilo" atau "Kilo Kilo no Mi"), bukan sekadar
--- mengandung kata (jadi "Heal Potion" aman); item di daftar langka (ping @everyone),
--- Candy Corn Basket, dan Rare Fruit Chest TIDAK PERNAH di-drop walau salah ketik di daftar.
+-- Pencocokan memakai nama kategori Common/Epic/Rare; Candy Corn Basket dan Rare Fruit Chest
+-- selalu dikecualikan.
 function Drop.norm(name)
     local s = Webhook.baseName(name):lower()
     s = s:gsub("%s+", " ")
     return Webhook.trim(s)
 end
 
+Drop.FruitCatalog = {}
+function Drop.refreshFruitCatalog()
+    local fruits = ReplicatedStorage:FindFirstChild("Modules")
+    fruits = fruits and fruits:FindFirstChild("ToolDesc")
+    fruits = fruits and fruits:FindFirstChild("Fruits")
+    local catalog = {Common = {}, Epic = {}, Rare = {}}
+    if fruits then
+        for rarity in pairs(catalog) do
+            local folder = fruits:FindFirstChild(rarity)
+            if folder then
+                for _, item in ipairs(folder:GetDescendants()) do
+                    local key = Drop.norm(item.Name)
+                    if key ~= "" then
+                        catalog[rarity][key] = true
+                        local base = key:gsub("%s+no%s+mi$", "")
+                        catalog[rarity][base] = true
+                        local firstWord, secondWord = base:match("^(%S+)%s+(%S+)$")
+                        if firstWord and firstWord == secondWord then catalog[rarity][firstWord] = true end
+                    end
+                end
+            end
+        end
+    end
+    Drop.FruitCatalog = catalog
+end
+
 function Drop.shouldDrop(name)
     local n = Drop.norm(name)
     if n == "" or n == Drop.norm(BASKET_NAME) or n == Drop.norm(CHEST_NAME) then return false end
-    if Webhook.isRare(name) then return false end
+    local candidates = {n}
+    local withoutNoMi = n:gsub("%s+no%s+mi$", "")
+    if withoutNoMi ~= n then table.insert(candidates, withoutNoMi) end
+    local firstWord, secondWord = withoutNoMi:match("^(%S+)%s+(%S+)$")
+    if firstWord and firstWord == secondWord then table.insert(candidates, firstWord) end
 
-    for entry in string.gmatch(Settings.DropList or "", "[^,\n]+") do
-        local cleaned = Webhook.trim(entry):gsub("^%d+%s*[xX]%s+", "")
-        local e = Drop.norm(cleaned)
-        if e ~= "" and (n == e or n == e .. " no mi" or n == e .. " " .. e .. " no mi") then
-            return true
+    for _, rarity in ipairs(Settings.DropRarities or {}) do
+        local names = Drop.FruitCatalog[rarity]
+        if names then
+            for _, candidate in ipairs(candidates) do
+                if names[candidate] then return true end
+            end
         end
     end
     return false
@@ -9859,6 +9933,7 @@ end
 
 -- Daftar Tool (Backpack + Character) yang perlu di-drop sekarang
 function Drop.collect()
+    Drop.refreshFruitCatalog()
     local list, now = {}, tick()
     local function scan(container)
         if not container then return end
