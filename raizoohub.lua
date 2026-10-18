@@ -11058,9 +11058,9 @@ local function mainLoop()
                         triggerDoorPrompt(door, Settings.HoldDuration)
                         Webhook.count("doors", 1)
 
-                        -- Jeda 3 detik setelah fire prompt, lalu tunggu stun selesai
+                        -- Jeda 5 detik setelah fire prompt, lalu tunggu stun selesai
                         -- sebelum tween / berjalan menuju door berikutnya.
-                        task.wait(3)
+                        task.wait(5)
                         waitUntilNotStunned()
 
                         -- Mundur sebentar sebelum cari pintu berikutnya - badan kemungkinan
