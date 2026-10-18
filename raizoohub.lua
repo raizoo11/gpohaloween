@@ -7571,6 +7571,8 @@ UI.MacSections.Traveling:Header({Name = "Traveling"})
 
 -- Standalone island tween modeled on Tensen's BodyVelocity/BodyGyro mover.
 -- It keeps its speed/toggle independent from the movement settings used by the farm.
+local fireGeppoOnce -- assigned below; Island Travel reuses the project's Geppo implementation.
+
 UI.IslandTravel = {
     Enabled = false,
     Selected = "None",
@@ -7595,6 +7597,7 @@ do
     function Travel.finishTween(motion, arrived)
         if not motion or motion.finished then return end
         motion.finished = true
+        motion.geppoActive = false
         if motion.connection then motion.connection:Disconnect(); motion.connection = nil end
         if motion.addedConnection then motion.addedConnection:Disconnect(); motion.addedConnection = nil end
         if motion.gyro then motion.gyro:Destroy(); motion.gyro = nil end
@@ -7699,6 +7702,13 @@ do
         end
 
         Travel.Tween = motion
+        motion.geppoActive = true
+        task.spawn(function()
+            while motion.geppoActive and not motion.finished and Travel.Tween == motion do
+                if motion.climb and fireGeppoOnce then fireGeppoOnce() end
+                task.wait(math.random(5, 7) / 10)
+            end
+        end)
         local maxTime = 20 -- Tensen TweenToCFrame default
         local raycastParams = RaycastParams.new()
         raycastParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -7761,6 +7771,7 @@ do
 
                 if obstacle then
                     motion.climb = obstacle
+                    if fireGeppoOnce then fireGeppoOnce() end
                     root.CFrame = CFrame.new(root.Position.X, obstacle.clearanceY, root.Position.Z)
                         * root.CFrame.Rotation
                     root.AssemblyLinearVelocity = Vector3.new(
@@ -8401,7 +8412,7 @@ local function hideDirectionIndicator()
 end
 
 -- ============ Geppo / Sky Walk (dipanggil dari tween & mainLoop) ============
-local function fireGeppoOnce()
+fireGeppoOnce = function()
     pcall(function()
         local char = LocalPlayer.Character
         local root = char and char:FindFirstChild("HumanoidRootPart")
