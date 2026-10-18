@@ -9265,6 +9265,7 @@ end
 -- Return: "Arrived" | "Finished" | "Blocked" | "Stuck" | "Stopped"
 function Nav.followWalk(waypoints, isDone, state)
     local i, n = 1, #waypoints
+    local indicatorTarget = waypoints[n] and waypoints[n].Position
     local segStart = tick()
     local lastPos, lastCheck = RootPart.Position, tick()
     local strikes = 0
@@ -9316,7 +9317,7 @@ function Nav.followWalk(waypoints, isDone, state)
 
         RunService.Heartbeat:Wait()
         Nav.steer(wp.Position)
-        showDirectionIndicator(wp.Position)
+        showDirectionIndicator(indicatorTarget or wp.Position)
 
         if tick() - lastCheck >= Nav.StuckInterval then
             if (RootPart.Position - lastPos).Magnitude < Nav.StuckDist then
@@ -9359,13 +9360,14 @@ function Nav.tweenAlong(points, timeout, isDone, state, jumps)
     local standH = Nav.standingHeight(hum, root)
     local up = Vector3.new(0, standH, 0)
     local n = #points
+    local indicatorTarget = points[n] + up
     local idx = 1
     local groundParams = (not walk) and Nav.rayParams(Nav.worldIgnore()) or nil
     local jumpedIdx = 0
     local prevAutoJump = nil
     local faceDir = Vector3.zero -- arah hadap badan (mode jalan)
 
-    showDirectionIndicator(points[1] + up)
+    showDirectionIndicator(indicatorTarget)
 
     local gyro = nil
     if not walk then
@@ -9451,7 +9453,7 @@ function Nav.tweenAlong(points, timeout, isDone, state, jumps)
             lastDist = (g - root.Position).Magnitude
             lastCheck = tick()
             stuckChecks = 0
-            showDirectionIndicator(g)
+            showDirectionIndicator(indicatorTarget)
             continue
         end
 
@@ -9510,7 +9512,7 @@ function Nav.tweenAlong(points, timeout, isDone, state, jumps)
         if gyro and flat.Magnitude > 0.5 then
             gyro.CFrame = CFrame.lookAt(pos, pos + flat)
         end
-        IndicatorBeam.targetPart.Position = goal
+        IndicatorBeam.targetPart.Position = indicatorTarget
 
         -- Watchdog progress ke titik aktif (dijeda selama stun)
         if isStunned() then
