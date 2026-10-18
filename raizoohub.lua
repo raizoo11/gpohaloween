@@ -10763,6 +10763,39 @@ local function doChestOpen()
     return false
 end
 
+-- Kick farm kalau item target baru masuk ke Backpack/Character.
+local RareItemKickWatcherRunning = false
+local function startRareItemKickWatcher()
+    if RareItemKickWatcherRunning then return end
+    RareItemKickWatcherRunning = true
+    task.spawn(function()
+        local previous = Webhook.snapshot()
+        while Enabled do
+            task.wait(0.5)
+            if not Enabled then break end
+
+            local current = Webhook.snapshot()
+            for name, count in pairs(current) do
+                local normalized = Webhook.trim(Webhook.baseName(name)):lower()
+                local isTarget = normalized == "brand of sacrifice" or normalized == "nightfall aura"
+                if isTarget and count > (previous[name] or 0) then
+                    Enabled = false
+                    Webhook.setActive(false)
+                    releaseAllMoveKeys()
+                    disableMovementMode()
+                    pcall(function()
+                        LocalPlayer:Kick(name .. " diperoleh; Halloween Farm dihentikan.")
+                    end)
+                    RareItemKickWatcherRunning = false
+                    return
+                end
+            end
+            previous = current
+        end
+        RareItemKickWatcherRunning = false
+    end)
+end
+
 -- Guard biar gak ada 2 mainLoop jalan bareng kalau toggle OFF lalu cepat ON lagi
 local MainLoopRunning = false
 
@@ -10983,6 +11016,7 @@ UI.setEnabled = function(state)
     if Enabled then
         Stat.set("Memulai", "cek basket, lalu cari event door...", "work")
         print("[AutoEventDoor] ON")
+        startRareItemKickWatcher()
         task.spawn(mainLoop)
     else
         print("[AutoEventDoor] OFF")
