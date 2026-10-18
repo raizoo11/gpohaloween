@@ -6149,6 +6149,13 @@ local Settings = {
     DoorCooldown = 180, -- detik, cooldown per door setelah dikunjungi (3 menit)
     ChestOpenAt = 7, -- kalau Rare Fruit Chest >= ini, buka chest berulang sampai sisa CHEST_KEEP (2) (0 = mati)
     AutoMerchant = false, -- jalan ke Traveling Merchant & beli item pilihan
+    AutoFishing = false,
+    FishingBaits = {"Common Fish Bait"},
+    AutoBuyBait = false,
+    BaitThreshold = 10,
+    BaitBuyAmount = 10,
+    AutoCraftBait = false,
+    CraftBaits = {},
     MerchantItems = "",   -- nama item, dipisah koma
     GeppoPass = true,   -- spam skill Geppo/Sky Walk selama tween (kayak di source)
     DoorGeppo = true,       -- sampai di door: tunggu sebentar, Geppo 1x, baru fire prompt
@@ -7520,6 +7527,7 @@ UI.MacGroup = UI.MacWindow:TabGroup()
 UI.MacTabs = {
     Farm = UI.MacGroup:Tab({Name = "Halloween"}),
     Traveling = UI.MacGroup:Tab({Name = "Traveling"}),
+    Fishing = UI.MacGroup:Tab({Name = "Fishing"}),
     Shop = UI.MacGroup:Tab({Name = "Shop"}),
     Drop = UI.MacGroup:Tab({Name = "Drop"}),
     Server = UI.MacGroup:Tab({Name = "Server"}),
@@ -7597,6 +7605,7 @@ do
     function Travel.finishTween(motion, arrived)
         if not motion or motion.finished then return end
         motion.finished = true
+        motion.arrived = arrived == true
         motion.geppoActive = false
         if motion.connection then motion.connection:Disconnect(); motion.connection = nil end
         if motion.addedConnection then motion.addedConnection:Disconnect(); motion.addedConnection = nil end
@@ -7661,7 +7670,7 @@ do
         }
     end
 
-    function Travel.beginTween(target, islandName)
+    function Travel.beginTween(target, islandName, external)
         local character = LocalPlayer.Character
         local root = character and character:FindFirstChild("HumanoidRootPart")
         local humanoid = character and character:FindFirstChildOfClass("Humanoid")
@@ -7672,6 +7681,7 @@ do
             humanoid = humanoid,
             target = target,
             islandName = islandName,
+            external = external == true,
             startedAt = tick(),
             platformStand = humanoid.PlatformStand,
             autoRotate = humanoid.AutoRotate,
@@ -7714,7 +7724,7 @@ do
         raycastParams.FilterType = Enum.RaycastFilterType.Exclude
         raycastParams.FilterDescendantsInstances = {character}
         motion.connection = RunService.Heartbeat:Connect(function(dt)
-            if Travel.Tween ~= motion or not Travel.Enabled or not root.Parent
+            if Travel.Tween ~= motion or (not Travel.Enabled and not motion.external) or not root.Parent
                 or not humanoid.Parent or humanoid.Health <= 0 then
                 Travel.finishTween(motion, false)
                 return
@@ -7887,6 +7897,28 @@ do
         Travel.stopOwnedTween()
     end
 
+    function Travel.moveTo(target, islandName, shouldContinue)
+        if typeof(target) ~= "CFrame" or Travel.Enabled or Travel.Tween then
+            return false
+        end
+        local function alive()
+            return (not shouldContinue or shouldContinue()) and not Travel.Enabled
+        end
+        while alive() do
+            local character = LocalPlayer.Character
+            local root = character and character:FindFirstChild("HumanoidRootPart")
+            if not root then task.wait(0.25); continue end
+            if (root.Position - target.Position).Magnitude <= 8 then return true end
+            local motion = Travel.beginTween(target, islandName, true)
+            if not motion then return false end
+            while Travel.Tween == motion and alive() do task.wait(0.1) end
+            if Travel.Tween == motion then Travel.finishTween(motion, false) end
+            if not alive() then return false end
+            task.wait(0.2)
+        end
+        return false
+    end
+
     function Travel.refreshOptions()
         local names, seen = {"None"}, {None = true}
         local function add(name)
@@ -7912,6 +7944,450 @@ do
             UI.MacState.IslandTravelDropdown:UpdateSelection(Travel.Selected)
         end
     end
+end
+
+UI.MacSections.Fishing:Header({Name = "Fishing Tensen"})
+UI.MacState.FishingStatus = UI.MacSections.Fishing:Label({Text = "Fishing: nonaktif"})
+UI.MacToggle(UI.MacSections.Fishing, "Auto Fishing", function() return Settings.AutoFishing end,
+    function(value) if value then Fishing.start() else Fishing.stop() end end)
+UI.MacState.FishingBaits = UI.MacSections.Fishing:Dropdown({
+    Name = "Prioritas bait",
+    Search = false,
+    Multi = true,
+    Required = false,
+    Options = FISH_BAITS,
+    Default = Settings.FishingBaits,
+    Callback = function(value)
+        local selected = {}
+        for _, bait in ipairs(FISH_BAITS) do if value[bait] then table.insert(selected, bait) end end
+        Settings.FishingBaits = selected
+    end,
+}, "FishingBaits")
+UI.MacToggle(UI.MacSections.Fishing, "Auto Buy Common Bait", function() return Settings.AutoBuyBait end,
+    function(value) Settings.AutoBuyBait = value end)
+UI.MacSections.Fishing:Input({
+    Name = "Beli jika bait di bawah",
+    Default = tostring(Settings.BaitThreshold),
+    AcceptedCharacters = "Numeric",
+    Callback = function(value) Settings.BaitThreshold = math.max(0, tonumber(value) or 10) end,
+})
+UI.MacSections.Fishing:Input({
+    Name = "Jumlah beli",
+    Default = tostring(Settings.BaitBuyAmount),
+    AcceptedCharacters = "Numeric",
+    Callback = function(value) Settings.BaitBuyAmount = math.max(1, tonumber(value) or 10) end,
+})
+UI.MacToggle(UI.MacSections.Fishing, "Auto Craft Bait", function() return Settings.AutoCraftBait end,
+    function(value) Settings.AutoCraftBait = value end)
+UI.MacSections.Fishing:Dropdown({
+    Name = "Bait untuk di-craft",
+    Search = false,
+    Multi = true,
+    Required = false,
+    Options = FISH_BAITS,
+    Default = Settings.CraftBaits,
+    Callback = function(value)
+        local selected = {}
+        for _, bait in ipairs(FISH_BAITS) do if value[bait] then table.insert(selected, bait) end end
+        Settings.CraftBaits = selected
+    end,
+}, "CraftBaits")
+UI.MacSections.Fishing:Label({Text = "Fishing otomatis menuju spot Tensen yang dikenal. Craft bait perlu data ikan dan NPC Blacksmith Sen."})
+
+local Fishing = {
+    Running = false,
+    SessionKey = nil,
+    ActionKey = nil,
+    Status = nil,
+}
+local FISH_BAITS = {"Common Fish Bait", "Rare Fish Bait", "Legendary Fish Bait"}
+local fishRarityCache, fishRarityCheckedAt = nil, 0
+
+function Fishing.setStatus(text)
+    if UI.MacState.FishingStatus then UI.MacState.FishingStatus:UpdateName("Fishing: " .. tostring(text)) end
+end
+
+function Fishing.inventory()
+    local stats = ReplicatedStorage:FindFirstChild("Stats" .. LocalPlayer.Name)
+    local inv = stats and stats:FindFirstChild("Inventory")
+    inv = inv and inv:FindFirstChild("Inventory")
+    if not inv or not inv.Value or inv.Value == "" then return nil end
+    local ok, data = pcall(function() return HttpService:JSONDecode(inv.Value) end)
+    return ok and type(data) == "table" and data or nil
+end
+
+function Fishing.amount(data, name)
+    local value = data and data[name]
+    if type(value) == "table" then value = value.Amount end
+    return tonumber(value) or 0
+end
+
+function Fishing.baitCount(name)
+    return Fishing.amount(Fishing.inventory(), name)
+end
+
+function Fishing.selectedBait()
+    local inventory = Fishing.inventory() or {}
+    local wanted = {}
+    for k, v in pairs(Settings.FishingBaits or {}) do
+        if type(k) == "number" and type(v) == "string" then wanted[v] = true
+        elseif type(k) == "string" and v then wanted[k] = true end
+    end
+    for _, name in ipairs(FISH_BAITS) do
+        if wanted[name] and Fishing.amount(inventory, name) > 0 then return name end
+    end
+    for _, name in ipairs(FISH_BAITS) do if wanted[name] then return name end end
+    return "Common Fish Bait"
+end
+
+function Fishing.findRod(container)
+    if not container then return nil end
+    for _, item in ipairs(container:GetChildren()) do
+        if item:IsA("Tool") and item.Name:lower():find("rod", 1, true) then return item end
+    end
+    return nil
+end
+
+function Fishing.equipRod()
+    local character = LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if not character or not humanoid then return false end
+    if Fishing.findRod(character) then return true end
+    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+    local rod = Fishing.findRod(backpack)
+    if rod then humanoid:EquipTool(rod); task.wait(0.5); return Fishing.findRod(character) ~= nil end
+    local tools = ReplicatedStorage:FindFirstChild("Events")
+    tools = tools and tools:FindFirstChild("Tools")
+    if tools and tools:IsA("RemoteFunction") then
+        pcall(function() tools:InvokeServer("equip", "Fishing Rod") end)
+    end
+    task.wait(0.75)
+    return Fishing.findRod(character) ~= nil
+end
+
+function Fishing.action(action, sessionKey, actionKey, extra)
+    local fishing = ReplicatedStorage:FindFirstChild("Fishing")
+    local remotes = fishing and fishing:FindFirstChild("Remotes")
+    local remote = remotes and remotes:FindFirstChild("Action")
+    if not remote or not remote:IsA("RemoteFunction") then return nil end
+    local payload = extra or {}
+    payload.Action = action
+    payload.SessionKey = sessionKey
+    payload.ActionKey = actionKey
+    local ok, result = pcall(function() return remote:InvokeServer(payload) end)
+    return ok and result or nil
+end
+
+function Fishing.soundOn(root)
+    if not root then return false end
+    for _, name in ipairs({"Small", "Medium", "Large", "Giant"}) do
+        local sound = root:FindFirstChild(name)
+        if sound and sound:IsA("Sound") then return true end
+    end
+    return false
+end
+
+function Fishing.waterY(position, fallback)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {LocalPlayer.Character}
+    local hit = workspace:Raycast(position + Vector3.new(0, 120, 0), Vector3.new(0, -500, 0), params)
+    if hit and hit.Material == Enum.Material.Water then return hit.Position.Y end
+    return fallback
+end
+
+function Fishing.castGoal(root)
+    local distance = 40
+    local flatLook = Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z)
+    if flatLook.Magnitude < 0.01 then flatLook = Vector3.new(0, 0, -1) end
+    flatLook = flatLook.Unit
+    local point = root.Position + flatLook * distance
+    point = Vector3.new(point.X, Fishing.waterY(point, root.Position.Y - 4), point.Z)
+    return point
+end
+
+function Fishing.pinHook(goal)
+    task.spawn(function()
+        local effects = workspace:FindFirstChild("Effects")
+        local hook = effects and effects:WaitForChild(LocalPlayer.Name .. "'s hook", 3)
+        if not hook then return end
+        pcall(function()
+            if hook:IsA("BasePart") then
+                hook.CFrame = CFrame.new(goal)
+                local position = Instance.new("BodyPosition")
+                position.MaxForce = Vector3.new(0, 2e9, 0)
+                position.Position = goal
+                position.Parent = hook
+            end
+        end)
+    end)
+end
+
+function Fishing.closeSession()
+    local sessionKey, actionKey = Fishing.SessionKey, Fishing.ActionKey
+    if sessionKey or actionKey then
+        for _, action in ipairs({"Reel", "HookReturning", "Cancel"}) do
+            local result = Fishing.action(action, sessionKey, actionKey)
+            if type(result) == "table" and result.ActionKey then actionKey = result.ActionKey end
+            task.wait(0.08)
+        end
+    end
+    Fishing.SessionKey, Fishing.ActionKey = nil, nil
+    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if root then
+        for _, name in ipairs({"Small", "Medium", "Large", "Giant"}) do
+            local sound = root:FindFirstChild(name)
+            if sound then pcall(function() sound:Destroy() end) end
+        end
+    end
+end
+
+function Fishing.fishOnce()
+    if not Fishing.equipRod() then Fishing.setStatus("fishing rod belum ada"); task.wait(1); return end
+    local bait = Fishing.selectedBait()
+    if Fishing.baitCount(bait) <= 0 then
+        Fishing.setStatus("umpan habis: " .. bait)
+        task.wait(2)
+        return
+    end
+    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not root then task.wait(0.5); return end
+    local goal = Fishing.castGoal(root)
+    Fishing.setStatus("melempar " .. bait)
+    local result = Fishing.action("Throw", nil, nil, {Goal = goal, Bait = bait})
+    if type(result) ~= "table" or result.Accepted ~= true then
+        Fishing.setStatus("lemparan ditolak server")
+        task.wait(1)
+        return
+    end
+
+    Fishing.SessionKey, Fishing.ActionKey = result.SessionKey, result.ActionKey
+    Fishing.pinHook(goal)
+    local landed = false
+    for _ = 1, 5 do
+        if not Settings.AutoFishing then break end
+        local response = Fishing.action("Landed", Fishing.SessionKey, Fishing.ActionKey)
+        if type(response) == "table" then
+            if response.ActionKey then Fishing.ActionKey = response.ActionKey end
+            if response.Accepted == true then landed = true; break end
+        end
+        if Fishing.soundOn(root) then landed = true; break end
+        task.wait(0.2)
+    end
+    if not landed then Fishing.closeSession(); Fishing.setStatus("gagal mendaratkan kail"); task.wait(0.5); return end
+
+    Fishing.setStatus("menunggu ikan")
+    local started = tick()
+    while Settings.AutoFishing and tick() - started < 45 and not Fishing.soundOn(root) do task.wait(0.2) end
+    if not Settings.AutoFishing then Fishing.closeSession(); return end
+    if not Fishing.soundOn(root) then Fishing.closeSession(); Fishing.setStatus("lemparan kedaluwarsa"); return end
+
+    Fishing.setStatus("menarik ikan")
+    local biteAt = tick()
+    while Settings.AutoFishing and tick() - biteAt < 8 do task.wait(0.2) end
+    local reelAt = tick()
+    while Settings.AutoFishing and Fishing.soundOn(root) and tick() - reelAt < 5 do
+        local response = Fishing.action("Reel", Fishing.SessionKey, Fishing.ActionKey)
+        if type(response) == "table" and response.ActionKey then Fishing.ActionKey = response.ActionKey end
+        task.wait(0.1)
+    end
+    local returning = Fishing.action("HookReturning", Fishing.SessionKey, Fishing.ActionKey)
+    if type(returning) == "table" and returning.ActionKey then Fishing.ActionKey = returning.ActionKey end
+    Fishing.action("Cancel", Fishing.SessionKey, Fishing.ActionKey)
+    Fishing.SessionKey, Fishing.ActionKey = nil, nil
+    Fishing.setStatus("siap cast berikutnya")
+    task.wait(0.3)
+end
+
+function Fishing.getSpot()
+    if game.PlaceId == 7465136166 then
+        return CFrame.new(-6763.41016, 27.0749931, 9203.70215)
+    elseif game.PlaceId == 116480749200627 then
+        return CFrame.new(-15.0580778, 4.21153259, -1423.65332)
+    elseif game.PlaceId == 3978370137 then
+        return CFrame.new(-1343.58374, 4.12497234, -4965.4873)
+    end
+    return nil
+end
+
+function Fishing.buyBaitIfLow()
+    if not Settings.AutoBuyBait or not Settings.AutoFishing then return end
+    local count = Fishing.baitCount("Common Fish Bait")
+    if count >= Settings.BaitThreshold then return end
+    local buyables = workspace:FindFirstChild("BuyableItems")
+    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not buyables or not root then return end
+    local best, bestDistance = nil, math.huge
+    for _, item in ipairs(buyables:GetChildren()) do
+        local shopPart = item:IsA("Model") and item:FindFirstChild("ShopPart")
+        if item.Name == "Common Fish Bait" and shopPart and shopPart:IsA("BasePart") then
+            local distance = (root.Position - shopPart.Position).Magnitude
+            if distance < bestDistance then best, bestDistance = item, distance end
+        end
+    end
+    if not best then return end
+    local event = ReplicatedStorage:FindFirstChild("Events")
+    local shop = event and event:FindFirstChild("Shop")
+    if shop and shop:IsA("RemoteFunction") then
+        Fishing.setStatus("membeli Common Fish Bait")
+        pcall(function() shop:InvokeServer(best, math.max(1, math.floor(Settings.BaitBuyAmount))) end)
+    end
+end
+
+function Fishing.rarityOf(entry)
+    if type(entry) == "string" then return entry end
+    if type(entry) == "table" then
+        if type(entry[1]) == "string" then return entry[1] end
+        return entry.Rarity or entry.rarity
+    end
+    return nil
+end
+
+function Fishing.fishRarities()
+    if fishRarityCache and tick() - fishRarityCheckedAt < 60 then return fishRarityCache end
+    fishRarityCheckedAt = tick()
+    local result, scanned = {}, 0
+    for _, module in ipairs(ReplicatedStorage:GetDescendants()) do
+        if module:IsA("ModuleScript") and module.Name:lower():find("fish", 1, true) then
+            scanned += 1
+            if scanned > 40 then break end
+            local ok, data = pcall(require, module)
+            if ok and type(data) == "table" then
+                local function walk(tbl, depth)
+                    for key, value in pairs(tbl) do
+                        if type(key) == "string" then
+                            local rarity = Fishing.rarityOf(value)
+                            if rarity == "Common" or rarity == "Rare" or rarity == "Legendary" then result[key] = rarity
+                            elseif type(value) == "table" and depth < 2 then walk(value, depth + 1) end
+                        elseif type(value) == "table" and depth < 2 then walk(value, depth + 1) end
+                    end
+                end
+                walk(data, 0)
+            end
+        end
+    end
+    if next(result) then fishRarityCache = result end
+    return fishRarityCache or {}
+end
+
+function Fishing.craftOne(bait)
+    local rarity = bait:gsub(" Fish Bait", "")
+    local inventory, rarityTable = Fishing.inventory(), Fishing.fishRarities()
+    if not inventory then return false, "inventory belum siap" end
+    local materials = {}
+    for name, fishRarity in pairs(rarityTable) do
+        if fishRarity == rarity and Fishing.amount(inventory, name) > 0 then table.insert(materials, name) end
+    end
+    table.sort(materials)
+    if #materials == 0 then return false, "data rarity/bahan ikan belum ditemukan" end
+    local extra = {}
+    if rarity == "Rare" then
+        local first = materials[1]
+        local second
+        for i = 2, #materials do if materials[i] ~= first then second = materials[i]; break end end
+        if second then
+            extra[first], extra[second] = "Rare Fish", "Rare Fish"
+        elseif Fishing.amount(inventory, first) >= 2 then
+            extra[first] = "Rare Fish"
+        else
+            return false, "butuh dua ikan Rare"
+        end
+    else
+        extra[rarity .. " Fish"] = materials[1]
+    end
+    local remote = ReplicatedStorage:FindFirstChild("CraftingRemote")
+    if not remote or not remote:IsA("RemoteFunction") then return false, "CraftingRemote tidak ditemukan" end
+    local before = Fishing.baitCount(bait)
+    local ok = pcall(function()
+        remote:InvokeServer({BlueprintItem = bait, Method = "Craft", ExtraData = extra, Count = 1})
+    end)
+    if not ok then return false, "permintaan craft gagal" end
+    local deadline = tick() + 3
+    repeat task.wait(0.2) until Fishing.baitCount(bait) > before or tick() > deadline or not Settings.AutoCraftBait
+    return Fishing.baitCount(bait) > before, Fishing.baitCount(bait) > before and "berhasil" or "server belum memberi bait"
+end
+
+function Fishing.craftIfPending()
+    if not Settings.AutoCraftBait then return false end
+    local inventory = Fishing.inventory()
+    if not inventory then return false end
+    local selected = {}
+    for k, v in pairs(Settings.CraftBaits or {}) do
+        if type(k) == "number" and type(v) == "string" then table.insert(selected, v)
+        elseif type(k) == "string" and v then table.insert(selected, k) end
+    end
+    table.sort(selected)
+    for _, bait in ipairs(selected) do
+        if Fishing.amount(inventory, bait) < 300 then
+            local rarity = bait:gsub(" Fish Bait", "")
+            local canCraft = false
+            for name, fishRarity in pairs(Fishing.fishRarities()) do
+                if fishRarity == rarity and Fishing.amount(inventory, name) > 0 then canCraft = true; break end
+            end
+            if canCraft then
+                local npcFolder = workspace:FindFirstChild("NPCs")
+                local npc = npcFolder and npcFolder:FindFirstChild("Blacksmith Sen")
+                local npcRoot = npc and (npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart or npc:FindFirstChildWhichIsA("BasePart"))
+                if not npcRoot then Fishing.setStatus("Blacksmith Sen belum ditemukan"); return false end
+                local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if not root then return false end
+                if (root.Position - npcRoot.Position).Magnitude > 20 then
+                    Fishing.setStatus("menuju Blacksmith Sen")
+                    if not Travel.moveTo(CFrame.new(npcRoot.Position + npcRoot.CFrame.LookVector * 5), "Craft Bait", function()
+                        return Settings.AutoFishing and Settings.AutoCraftBait and not Enabled
+                    end) then return false end
+                end
+                local ok, message = Fishing.craftOne(bait)
+                Fishing.setStatus(message .. ": " .. bait)
+                task.wait(0.4)
+                return ok
+            end
+        end
+    end
+    return false
+end
+
+function Fishing.start()
+    Settings.AutoFishing = true
+    if Fishing.Running then return end
+    Fishing.Running = true
+    task.spawn(function()
+        while Settings.AutoFishing do
+            if Enabled or UI.IslandTravel.Enabled then
+                Fishing.setStatus("tunggu farm/travel selesai")
+                task.wait(0.5)
+            else
+                pcall(Fishing.buyBaitIfLow)
+                if Fishing.craftIfPending() then
+                    task.wait(0.5)
+                else
+                    local spot = Fishing.getSpot()
+                    if spot then
+                        local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                        if root and (root.Position - spot.Position).Magnitude > 10 then
+                            Fishing.setStatus("menuju spot Tensen")
+                            Travel.moveTo(spot, "Fishing", function()
+                                return Settings.AutoFishing and not Enabled and not UI.IslandTravel.Enabled
+                            end)
+                        end
+                    end
+                    if Settings.AutoFishing and not Enabled and not UI.IslandTravel.Enabled then
+                        if not spot then Fishing.setStatus("tempat ini tidak ada spot Tensen; berdiri dekat air") end
+                        Fishing.fishOnce()
+                    end
+                end
+            end
+            task.wait(0.15)
+        end
+        Fishing.closeSession()
+        Fishing.Running = false
+        Fishing.setStatus("nonaktif")
+    end)
+end
+
+function Fishing.stop()
+    Settings.AutoFishing = false
+    Fishing.closeSession()
 end
 
 UI.MacSections.Traveling:Header({Name = "Island Travel (Tween gaya Tensen)"})
