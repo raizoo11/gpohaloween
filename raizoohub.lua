@@ -8869,8 +8869,7 @@ local function disableMovementMode()
 end
 
 -- ============ Indikator arah (visual aja) ============
--- Part indikator ditaruh di workspace (bukan di Character) supaya tetap hidup
--- setelah respawn.
+-- Garis dibuat tipis dan lembut; orb kecil menandai tujuan akhir rute.
 local IndicatorBeam
 do
     local originPart = Instance.new("Part")
@@ -8900,30 +8899,66 @@ do
     targetPart.Anchored = true
     targetPart.Parent = workspace
 
+    local endpoint = Instance.new("Part")
+    endpoint.Name = "AutoEventDoorIndicatorEndpoint"
+    endpoint.Shape = Enum.PartType.Ball
+    endpoint.Size = Vector3.new(0.38, 0.38, 0.38)
+    endpoint.Material = Enum.Material.Neon
+    endpoint.Color = Color3.fromRGB(255, 194, 105)
+    endpoint.Transparency = 0.12
+    endpoint.CastShadow = false
+    endpoint.Anchored = true
+    endpoint.CanCollide = false
+    endpoint.CanQuery = false
+    endpoint.CanTouch = false
+    endpoint.Parent = workspace
+
+    local endpointLight = Instance.new("PointLight")
+    endpointLight.Color = endpoint.Color
+    endpointLight.Brightness = 0.55
+    endpointLight.Range = 5
+    endpointLight.Parent = endpoint
+
     local att0 = Instance.new("Attachment", originPart)
     local att1 = Instance.new("Attachment", targetPart)
 
     local beam = Instance.new("Beam")
     beam.Attachment0 = att0
     beam.Attachment1 = att1
-    beam.Width0 = 0.3
-    beam.Width1 = 0.3
-    beam.Color = ColorSequence.new(Color3.fromRGB(255, 230, 0))
-    beam.Transparency = NumberSequence.new(0.3)
+    beam.Width0 = 0.13
+    beam.Width1 = 0.045
+    beam.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 205, 130)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 174, 92)),
+    })
+    beam.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.62),
+        NumberSequenceKeypoint.new(0.72, 0.38),
+        NumberSequenceKeypoint.new(1, 0.12),
+    })
+    beam.LightEmission = 0.25
+    beam.LightInfluence = 0
     beam.FaceCamera = true
     beam.Enabled = false
     beam.Parent = originPart
 
-    IndicatorBeam = { beam = beam, targetPart = targetPart }
+    endpoint.Transparency = 1
+    endpointLight.Enabled = false
+    IndicatorBeam = { beam = beam, targetPart = targetPart, endpoint = endpoint, endpointLight = endpointLight }
 end
 
 local function showDirectionIndicator(targetPos)
     IndicatorBeam.targetPart.Position = targetPos
+    IndicatorBeam.endpoint.Position = targetPos
+    IndicatorBeam.endpoint.Transparency = 0.12
+    IndicatorBeam.endpointLight.Enabled = true
     IndicatorBeam.beam.Enabled = true
 end
 
 local function hideDirectionIndicator()
     IndicatorBeam.beam.Enabled = false
+    IndicatorBeam.endpoint.Transparency = 1
+    IndicatorBeam.endpointLight.Enabled = false
 end
 
 -- ============ Geppo / Sky Walk (dipanggil dari tween & mainLoop) ============
