@@ -8869,6 +8869,16 @@ local function disableMovementMode()
 end
 
 -- ============ Indikator arah (visual aja) ============
+-- Bersihkan indikator dari versi script sebelumnya agar tidak ada garis ganda.
+for _, child in ipairs(workspace:GetChildren()) do
+    if child.Name == "AutoEventDoorIndicatorOrigin"
+        or child.Name == "AutoEventDoorIndicatorTarget"
+        or child.Name == "AutoEventDoorIndicatorNode"
+        or child.Name == "AutoEventDoorIndicatorEndpoint" then
+        child:Destroy()
+    end
+end
+
 -- Rangkaian beam mengikuti seluruh waypoint hingga tujuan akhir.
 local IndicatorBeam
 do
