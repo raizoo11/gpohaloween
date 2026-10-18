@@ -6149,6 +6149,8 @@ local Settings = {
     DoorCooldown = 180, -- detik, cooldown per door setelah dikunjungi (3 menit)
     ChestOpenAt = 7, -- kalau Rare Fruit Chest >= ini, buka chest berulang sampai sisa CHEST_KEEP (2) (0 = mati)
     AutoMerchant = false, -- jalan ke Traveling Merchant & beli item pilihan
+    AutoBuyRareChest = true,
+    AutoBuyRaceReroll = false,
     AutoFishing = false,
     FishingBaits = {"Common Fish Bait"},
     AutoBuyBait = false,
@@ -7568,6 +7570,12 @@ UI.MacToggle(UI.MacSections.Farm, "Farm ON/OFF", function() return Enabled end,
     function(value) UI.setEnabled(value) end)
 UI.MacInput(UI.MacSections.Farm, "Cooldown (s)", CooldownBox)
 UI.MacInput(UI.MacSections.Farm, "Candy Target", CandyTargetBox)
+UI.MacSections.Farm:Header({Name = "Auto Buy Halloween"})
+UI.MacState.HalloweenShopStatus = UI.MacSections.Farm:Label({Text = "Halloween Shop: idle"})
+UI.MacToggle(UI.MacSections.Farm, "Auto Buy Rare Fruit Chest", function() return Settings.AutoBuyRareChest end,
+    function(value) Settings.AutoBuyRareChest = value end)
+UI.MacToggle(UI.MacSections.Farm, "Auto Buy Race Reroll x5", function() return Settings.AutoBuyRaceReroll end,
+    function(value) Settings.AutoBuyRaceReroll = value end)
 UI.MacInput(UI.MacSections.Farm, "FPS Cap", FpsCapBox)
 UI.MacToggle(UI.MacSections.Farm, "FPS Cap aktif", function() return Settings.FpsCapEnabled end,
     function(value)
@@ -10054,6 +10062,60 @@ local function doShopTrip()
     return bought > 0
 end
 
+-- ============ Auto Buy Halloween Shop ============
+local HalloweenRaceBuy = {Failures = 0}
+function HalloweenRaceBuy.status(text)
+    if UI.MacState.HalloweenShopStatus then
+        UI.MacState.HalloweenShopStatus:UpdateName("Halloween Shop: " .. tostring(text))
+    end
+end
+
+task.spawn(function()
+    while true do
+        if not Settings.AutoBuyRaceReroll then
+            HalloweenRaceBuy.Failures = 0
+            task.wait(0.5)
+        else
+            local candy = getCandyCount()
+            if Settings.AutoBuyRareChest and Enabled and candy and candy >= Settings.CandyTarget then
+                HalloweenRaceBuy.status("menunggu pembelian Rare Fruit Chest")
+                task.wait(1)
+            else
+                local remote = ReplicatedStorage:FindFirstChild("HalloweenShopRemote")
+                if not remote or not remote:IsA("RemoteFunction") then
+                    HalloweenRaceBuy.status("HalloweenShopRemote belum tersedia")
+                    task.wait(5)
+                else
+                    local before = getCandyCount()
+                    HalloweenRaceBuy.status("membeli Race Reroll x5")
+                    local ok, response = pcall(function()
+                        return remote:InvokeServer("Race Reroll x5")
+                    end)
+                    task.wait(1)
+                    local after = getCandyCount()
+                    local rejected = response == false
+                        or type(response) == "table" and (response.Success == false or response.Accepted == false)
+                    if not ok or rejected then
+                        HalloweenRaceBuy.Failures += 1
+                        HalloweenRaceBuy.status("pembelian ditolak; coba lagi nanti")
+                        task.wait(math.min(30 * HalloweenRaceBuy.Failures, 300))
+                    elseif before and after and after < before then
+                        HalloweenRaceBuy.Failures = 0
+                        HalloweenRaceBuy.status("Race Reroll x5 terbeli")
+                        task.wait(15)
+                    else
+                        -- Jika remote tidak mengembalikan status dan candy tidak berubah,
+                        -- beri jeda panjang supaya tidak mengirim permintaan berulang cepat.
+                        HalloweenRaceBuy.Failures += 1
+                        HalloweenRaceBuy.status("permintaan terkirim; belum bisa diverifikasi")
+                        task.wait(math.min(30 * HalloweenRaceBuy.Failures, 300))
+                    end
+                end
+            end
+        end
+    end
+end)
+
 -- ============ Auto Merchant (Traveling Merchant) ============
 -- Dari source: merchant dianggap "lagi muncul" kalau ada value
 -- ReplicatedStorage.CompassGuider["Traveling Merchant"] (Vector3 / CFrame = posisi
@@ -10790,7 +10852,7 @@ local function mainLoop()
 
         -- Candy udah cukup: pergi beli chest dulu, lalu balik ngumpulin candy
         local candyCount = getCandyCount()
-        if not tripped and candyCount and candyCount >= Settings.CandyTarget
+        if Settings.AutoBuyRareChest and not tripped and candyCount and candyCount >= Settings.CandyTarget
             and tick() >= ShopRetryAt then
             tripped = true
 
