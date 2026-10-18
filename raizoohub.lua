@@ -7574,7 +7574,7 @@ UI.MacSections.Farm:Header({Name = "Auto Buy Halloween"})
 UI.MacState.HalloweenShopStatus = UI.MacSections.Farm:Label({Text = "Halloween Shop: idle"})
 UI.MacToggle(UI.MacSections.Farm, "Auto Buy Rare Fruit Chest", function() return Settings.AutoBuyRareChest end,
     function(value) Settings.AutoBuyRareChest = value end)
-UI.MacToggle(UI.MacSections.Farm, "Auto Buy Race Reroll x5 (Farm ON)", function() return Settings.AutoBuyRaceReroll end,
+UI.MacToggle(UI.MacSections.Farm, "Auto Buy Race Reroll x5 (Candy Target)", function() return Settings.AutoBuyRaceReroll end,
     function(value) Settings.AutoBuyRaceReroll = value end)
 UI.MacInput(UI.MacSections.Farm, "FPS Cap", FpsCapBox)
 UI.MacToggle(UI.MacSections.Farm, "FPS Cap aktif", function() return Settings.FpsCapEnabled end,
@@ -10028,9 +10028,9 @@ local function arriveAtWitch()
     return closeEnough()
 end
 
--- Return: true kalau minimal 1 pembelian terverifikasi (candy berkurang).
--- Sampai di NPC, beli berulang selama candy masih >= CandyTarget, jadi gak
--- perlu bolak-balik jalan tiap beli.
+-- Race Reroll dan Rare Fruit Chest hanya diproses setelah CandyTarget tercapai.
+local RaceRerollRetryAt = 0
+local HalloweenShopStatus
 local function doShopTrip()
     if not getWitchStandPosition() then
         print("[AutoEventDoor] Witch of Halloween gak ketemu di workspace.NPCs.")
@@ -10038,14 +10038,10 @@ local function doShopTrip()
     end
 
     print("[AutoEventDoor] Candy cukup, jalan ke Witch of Halloween...")
-    Stat.set("Menuju Witch of Halloween", Stat.towards(function() return ShopTarget.Position end, "candy cukup"), "move")
+    Stat.set("Menuju Witch of Halloween", Stat.towards(function() return ShopTarget.Position end, "candy mencapai target"), "move")
     local arrived = arriveAtWitch()
-    if not Enabled then
-        return false
-    end
+    if not Enabled then return false end
     if not arrived then
-        -- Belum beneran sampai: JANGAN coba beli. Return false -> mainLoop kasih
-        -- jeda (backoff) lalu lanjut farm door, script tetap jalan.
         print("[AutoEventDoor] Belum pas sampai di Witch, pembelian dibatalkan.")
         return false
     end
@@ -10053,12 +10049,40 @@ local function doShopTrip()
     task.wait(SHOP_WAIT)
     if not Enabled then return false end
 
-    local bought = 0
-    while Enabled and bought < MAX_BUYS_PER_TRIP do
+    local rerollBought = false
+    if Settings.AutoBuyRaceReroll and tick() >= RaceRerollRetryAt then
         local before = getCandyCount()
-        if before and before < Settings.CandyTarget then
-            break -- candy udah gak cukup buat beli lagi
+        if before and before >= Settings.CandyTarget then
+            HalloweenShopStatus("membeli Race Reroll x5")
+            local ok, response = pcall(function()
+                local remote = ReplicatedStorage:WaitForChild("HalloweenShopRemote", 5)
+                if not remote then error("HalloweenShopRemote belum tersedia") end
+                return remote:InvokeServer("Race Reroll x5")
+            end)
+
+            if ok and response ~= false
+                and not (type(response) == "table" and (response.Success == false or response.Accepted == false)) then
+                task.wait(1)
+                local after = getCandyCount()
+                if after and after < before then
+                    rerollBought = true
+                    RaceRerollRetryAt = tick() + 30
+                    HalloweenShopStatus("Race Reroll x5 terbeli")
+                else
+                    RaceRerollRetryAt = tick() + 60
+                    HalloweenShopStatus("candy tidak berkurang; pembelian gagal")
+                end
+            else
+                RaceRerollRetryAt = tick() + 60
+                HalloweenShopStatus("pembelian Race Reroll ditolak")
+            end
         end
+    end
+
+    local bought = 0
+    while Settings.AutoBuyRareChest and Enabled and bought < MAX_BUYS_PER_TRIP do
+        local before = getCandyCount()
+        if before and before < Settings.CandyTarget then break end
 
         Stat.set("Beli " .. SHOP_ITEM, string.format("pembelian ke-%d  |  candy %s", bought + 1, tostring(before)), "work")
         local ok, err = pcall(function()
@@ -10073,8 +10097,6 @@ local function doShopTrip()
 
         task.wait(1)
         local after = getCandyCount()
-
-        -- Sukses = candy BERKURANG. Kalau gak berkurang, anggap pembelian gagal.
         if before and after and after >= before then
             print("[AutoEventDoor] Candy gak berkurang, pembelian dianggap gagal.")
             break
@@ -10082,65 +10104,20 @@ local function doShopTrip()
 
         bought = bought + 1
         Webhook.count("chestsBought", 1)
-        if not (before and after) then
-            break -- candy gak kebaca, gak bisa diverifikasi, cukup 1x
-        end
+        if not (before and after) then break end
     end
 
     if bought > 0 then
         print("[AutoEventDoor] Beli " .. SHOP_ITEM .. " x" .. bought .. ", balik ngumpulin candy.")
     end
-    return bought > 0
+    return bought > 0 or rerollBought
 end
 
--- ============ Race Reroll trip ke Witch of Halloween ============
-local RaceRerollRetryAt = 0
-local function halloweenShopStatus(text)
+HalloweenShopStatus = function(text)
     if UI.MacState.HalloweenShopStatus then
         UI.MacState.HalloweenShopStatus:UpdateName("Halloween Shop: " .. tostring(text))
     end
 end
-
-local function doRaceRerollTrip()
-    if not getWitchStandPosition() then
-        halloweenShopStatus("Witch of Halloween belum ditemukan")
-        return false
-    end
-
-    halloweenShopStatus("tween ke Witch of Halloween")
-    Stat.set("Menuju Witch untuk Race Reroll", Stat.towards(function() return ShopTarget.Position end, "Auto Buy Race Reroll"), "move")
-    local arrived = arriveAtWitch()
-    if not Enabled then return false end
-    if not arrived then
-        halloweenShopStatus("gagal sampai ke Witch")
-        return false
-    end
-
-    task.wait(SHOP_WAIT)
-    if not Enabled then return false end
-    halloweenShopStatus("membeli Race Reroll x5")
-    local before = getCandyCount()
-    local ok, response = pcall(function()
-        local remote = ReplicatedStorage:WaitForChild("HalloweenShopRemote", 5)
-        if not remote then error("HalloweenShopRemote belum tersedia") end
-        return remote:InvokeServer("Race Reroll x5")
-    end)
-    if not ok or response == false
-        or type(response) == "table" and (response.Success == false or response.Accepted == false) then
-        halloweenShopStatus("pembelian ditolak")
-        return false
-    end
-
-    task.wait(1)
-    local after = getCandyCount()
-    if before and after and after >= before then
-        halloweenShopStatus("candy tidak berkurang; pembelian gagal")
-        return false
-    end
-    halloweenShopStatus("Race Reroll x5 terbeli")
-    return true
-end
-
 
 -- ============ Auto Merchant (Traveling Merchant) ============
 -- Dari source: merchant dianggap "lagi muncul" kalau ada value
@@ -10876,10 +10853,11 @@ local function mainLoop()
             end
         end
 
-        -- Candy udah cukup: pergi beli chest dulu, lalu balik ngumpulin candy
+        -- Candy mencapai target: trip ke Witch untuk item yang diaktifkan.
         local candyCount = getCandyCount()
-        if Settings.AutoBuyRareChest and not tripped and candyCount and candyCount >= Settings.CandyTarget
-            and tick() >= ShopRetryAt then
+        local raceRerollReady = Settings.AutoBuyRaceReroll and tick() >= RaceRerollRetryAt
+        if (Settings.AutoBuyRareChest or raceRerollReady) and not tripped
+            and candyCount and candyCount >= Settings.CandyTarget and tick() >= ShopRetryAt then
             tripped = true
 
             if doShopTrip() then
@@ -10896,17 +10874,6 @@ local function mainLoop()
                     backoff .. " detik lagi. Lanjut farm door dulu.")
                 task.wait(1)
             end
-        end
-
-        -- Auto Race Reroll ikut tween ke Witch. Race reroll hanya dicoba setelah cooldown.
-        if not tripped and Settings.AutoBuyRaceReroll and tick() >= RaceRerollRetryAt then
-            tripped = true
-            if doRaceRerollTrip() then
-                RaceRerollRetryAt = tick() + 30
-            else
-                RaceRerollRetryAt = tick() + 60
-            end
-            Stat.clear()
         end
 
         if not tripped then
