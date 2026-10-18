@@ -7642,7 +7642,7 @@ do
         Travel.finishTween(Travel.Tween, false)
     end
 
-    function Travel.obstacleLanding(root, hit, direction, raycastParams)
+    function Travel.obstacleLanding(root, hit, direction, raycastParams, allowLower)
         local part = hit and hit.Instance
         if not (part and part:IsA("BasePart")) then return nil end
         local normal = hit.Normal
@@ -7661,12 +7661,14 @@ do
             + math.abs(cf.UpVector.Y) * size.Y / 2
             + math.abs(cf.LookVector.Y) * size.Z / 2
         local neededY = wallTop + math.max(root.Size.Y / 2 + 1.5, 3)
-        if neededY <= root.Position.Y + 1 then return nil end
-        local ceilingParams = RaycastParams.new()
-        ceilingParams.FilterType = Enum.RaycastFilterType.Exclude
-        ceilingParams.FilterDescendantsInstances = {root.Parent}
-        local ceiling = workspace:Raycast(root.Position, Vector3.new(0, neededY - root.Position.Y + 2, 0), ceilingParams)
-        if ceiling and ceiling.Position.Y <= neededY + 1 then return nil end
+        if neededY <= root.Position.Y + 1 and not allowLower then return nil end
+        if neededY > root.Position.Y + 1 then
+            local ceilingParams = RaycastParams.new()
+            ceilingParams.FilterType = Enum.RaycastFilterType.Exclude
+            ceilingParams.FilterDescendantsInstances = {root.Parent}
+            local ceiling = workspace:Raycast(root.Position, Vector3.new(0, neededY - root.Position.Y + 2, 0), ceilingParams)
+            if ceiling and ceiling.Position.Y <= neededY + 1 then return nil end
+        end
 
         local projectedDepth = math.abs(direction:Dot(cf.RightVector)) * size.X / 2
             + math.abs(direction:Dot(cf.LookVector)) * size.Z / 2
@@ -7676,6 +7678,35 @@ do
             clearanceY = neededY,
             depth = math.max(projectedDepth + 6, 8),
         }
+    end
+
+    function Travel.scanObstacle(root, direction, right, raycastParams, reach, allowLower)
+        -- Include a low ray at foot height: during a climb the root is above the wall,
+        -- so root-height rays miss the next closely-spaced wall in a row of buildings.
+        local scanOrigin = root.Position - direction * 4
+        local lowOrigin = scanOrigin - Vector3.new(0, math.max(root.Size.Y * 0.5 + 1, 3), 0)
+        local rays = {
+            {scanOrigin, direction * reach},
+            {scanOrigin + right * 1.5, direction * reach},
+            {scanOrigin - right * 1.5, direction * reach},
+            {scanOrigin + Vector3.new(0, 4, 0), direction * reach},
+            {scanOrigin + Vector3.new(0, 8, 0), direction * reach},
+            {scanOrigin + Vector3.new(0, 12, 0), direction * reach},
+            {lowOrigin, direction * reach},
+            {lowOrigin + right * 1.5, direction * reach},
+            {lowOrigin - right * 1.5, direction * reach},
+        }
+        local nearest, nearestDistance
+        for _, ray in ipairs(rays) do
+            local hit = workspace:Raycast(ray[1], ray[2], raycastParams)
+            if hit then
+                local obstacle = Travel.obstacleLanding(root, hit, direction, raycastParams, allowLower)
+                if obstacle and (not nearestDistance or hit.Distance < nearestDistance) then
+                    nearest, nearestDistance = obstacle, hit.Distance
+                end
+            end
+        end
+        return nearest
     end
 
     function Travel.beginTween(target, islandName, external)
@@ -7756,8 +7787,27 @@ do
             flatDirection = flatDirection.Unit
             local look = Vector3.new(flatDirection.X, 0, flatDirection.Z)
             local right = Vector3.new(-look.Z, 0, look.X)
+            local reach = math.max(12, Travel.Speed * dt * 2.5 + 6)
             if motion.climb then
                 local climb = motion.climb
+                -- Keep the elevated crossing active until the next barrier is also clear.
+                -- Adjacent walls often arrive before the character has landed after wall 1.
+                local nextObstacle = Travel.scanObstacle(root, look, right, raycastParams, reach, true)
+                if nextObstacle then
+                    local firstPoint = Vector3.new(climb.point.X, 0, climb.point.Z)
+                    local nextPoint = Vector3.new(nextObstacle.point.X, 0, nextObstacle.point.Z)
+                    local offset = (nextPoint - firstPoint):Dot(climb.direction)
+                    climb.depth = math.max(climb.depth, offset + nextObstacle.depth)
+                    climb.clearanceY = math.max(climb.clearanceY, nextObstacle.clearanceY)
+                    if nextObstacle.clearanceY > root.Position.Y + 1 then
+                        if fireGeppoOnce then fireGeppoOnce() end
+                        root.CFrame = CFrame.new(root.Position.X, nextObstacle.clearanceY, root.Position.Z)
+                            * root.CFrame.Rotation
+                        root.AssemblyLinearVelocity = Vector3.new(
+                            root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z)
+                    end
+                end
+
                 local progress = (flatPosition - Vector3.new(climb.point.X, 0, climb.point.Z))
                     :Dot(climb.direction)
                 if progress > climb.depth then
@@ -7767,26 +7817,7 @@ do
             end
 
             if not motion.climb then
-                -- Back the rays away from the root so a wall touching the character
-                -- is still detected; sample higher points for tall house walls.
-                local reach = math.max(10, Travel.Speed * dt * 2.5 + 4)
-                local scanOrigin = root.Position - look * 4
-                local obstacle
-                for _, ray in ipairs({
-                    {scanOrigin, look * reach},
-                    {scanOrigin + right * 1.5, look * reach},
-                    {scanOrigin - right * 1.5, look * reach},
-                    {scanOrigin + Vector3.new(0, 4, 0), look * reach},
-                    {scanOrigin + Vector3.new(0, 8, 0), look * reach},
-                    {scanOrigin + Vector3.new(0, 12, 0), look * reach},
-                }) do
-                    local hit = workspace:Raycast(ray[1], ray[2], raycastParams)
-                    if hit then
-                        obstacle = Travel.obstacleLanding(root, hit, look, raycastParams)
-                        if obstacle then break end
-                    end
-                end
-
+                local obstacle = Travel.scanObstacle(root, look, right, raycastParams, reach, false)
                 if obstacle then
                     motion.climb = obstacle
                     if fireGeppoOnce then fireGeppoOnce() end
