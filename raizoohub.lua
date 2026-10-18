@@ -8869,7 +8869,7 @@ local function disableMovementMode()
 end
 
 -- ============ Indikator arah (visual aja) ============
--- Garis dibuat tipis dan lembut; orb kecil menandai tujuan akhir rute.
+-- Rangkaian beam mengikuti seluruh waypoint hingga tujuan akhir.
 local IndicatorBeam
 do
     local originPart = Instance.new("Part")
@@ -8880,7 +8880,6 @@ do
     originPart.CanQuery = false
     originPart.CanTouch = false
     originPart.Anchored = true
-    originPart.CFrame = RootPart.CFrame
     originPart.Parent = workspace
 
     RunService.Heartbeat:Connect(function()
@@ -8889,15 +8888,8 @@ do
         end
     end)
 
-    local targetPart = Instance.new("Part")
-    targetPart.Name = "AutoEventDoorIndicatorTarget"
-    targetPart.Size = Vector3.new(0.2, 0.2, 0.2)
-    targetPart.Transparency = 1
-    targetPart.CanCollide = false
-    targetPart.CanQuery = false
-    targetPart.CanTouch = false
-    targetPart.Anchored = true
-    targetPart.Parent = workspace
+    local originAttachment = Instance.new("Attachment")
+    originAttachment.Parent = originPart
 
     local endpoint = Instance.new("Part")
     endpoint.Name = "AutoEventDoorIndicatorEndpoint"
@@ -8905,7 +8897,7 @@ do
     endpoint.Size = Vector3.new(0.38, 0.38, 0.38)
     endpoint.Material = Enum.Material.Neon
     endpoint.Color = Color3.fromRGB(255, 194, 105)
-    endpoint.Transparency = 0.12
+    endpoint.Transparency = 1
     endpoint.CastShadow = false
     endpoint.Anchored = true
     endpoint.CanCollide = false
@@ -8917,14 +8909,33 @@ do
     endpointLight.Color = endpoint.Color
     endpointLight.Brightness = 0.55
     endpointLight.Range = 5
+    endpointLight.Enabled = false
     endpointLight.Parent = endpoint
 
-    local att0 = Instance.new("Attachment", originPart)
-    local att1 = Instance.new("Attachment", targetPart)
+    IndicatorBeam = {
+        originPart = originPart,
+        originAttachment = originAttachment,
+        endpoint = endpoint,
+        endpointLight = endpointLight,
+        segments = {},
+    }
+end
+
+local function createIndicatorSegment(index)
+    local node = Instance.new("Part")
+    node.Name = "AutoEventDoorIndicatorNode"
+    node.Size = Vector3.new(0.2, 0.2, 0.2)
+    node.Transparency = 1
+    node.CanCollide = false
+    node.CanQuery = false
+    node.CanTouch = false
+    node.Anchored = true
+    node.Parent = workspace
+
+    local attachment = Instance.new("Attachment")
+    attachment.Parent = node
 
     local beam = Instance.new("Beam")
-    beam.Attachment0 = att0
-    beam.Attachment1 = att1
     beam.Width0 = 0.13
     beam.Width1 = 0.045
     beam.Color = ColorSequence.new({
@@ -8940,23 +8951,40 @@ do
     beam.LightInfluence = 0
     beam.FaceCamera = true
     beam.Enabled = false
-    beam.Parent = originPart
+    beam.Parent = IndicatorBeam.originPart
 
-    endpoint.Transparency = 1
-    endpointLight.Enabled = false
-    IndicatorBeam = { beam = beam, targetPart = targetPart, endpoint = endpoint, endpointLight = endpointLight }
+    local segment = {node = node, attachment = attachment, beam = beam}
+    IndicatorBeam.segments[index] = segment
+    return segment
 end
 
-local function showDirectionIndicator(targetPos)
-    IndicatorBeam.targetPart.Position = targetPos
-    IndicatorBeam.endpoint.Position = targetPos
-    IndicatorBeam.endpoint.Transparency = 0.12
-    IndicatorBeam.endpointLight.Enabled = true
-    IndicatorBeam.beam.Enabled = true
+local function showDirectionPath(points)
+    local count = #points
+    for index = 1, count do
+        local segment = IndicatorBeam.segments[index] or createIndicatorSegment(index)
+        segment.node.Position = points[index]
+        segment.beam.Attachment0 = index == 1
+            and IndicatorBeam.originAttachment
+            or IndicatorBeam.segments[index - 1].attachment
+        segment.beam.Attachment1 = segment.attachment
+        segment.beam.Enabled = true
+    end
+
+    for index = count + 1, #IndicatorBeam.segments do
+        IndicatorBeam.segments[index].beam.Enabled = false
+    end
+
+    if count > 0 then
+        IndicatorBeam.endpoint.Position = points[count]
+        IndicatorBeam.endpoint.Transparency = 0.12
+        IndicatorBeam.endpointLight.Enabled = true
+    end
 end
 
 local function hideDirectionIndicator()
-    IndicatorBeam.beam.Enabled = false
+    for _, segment in ipairs(IndicatorBeam.segments) do
+        segment.beam.Enabled = false
+    end
     IndicatorBeam.endpoint.Transparency = 1
     IndicatorBeam.endpointLight.Enabled = false
 end
@@ -9300,7 +9328,11 @@ end
 -- Return: "Arrived" | "Finished" | "Blocked" | "Stuck" | "Stopped"
 function Nav.followWalk(waypoints, isDone, state)
     local i, n = 1, #waypoints
-    local indicatorTarget = waypoints[n] and waypoints[n].Position
+    local indicatorPoints = {}
+    for _, waypoint in ipairs(waypoints) do
+        table.insert(indicatorPoints, waypoint.Position)
+    end
+    showDirectionPath(indicatorPoints)
     local segStart = tick()
     local lastPos, lastCheck = RootPart.Position, tick()
     local strikes = 0
@@ -9352,7 +9384,6 @@ function Nav.followWalk(waypoints, isDone, state)
 
         RunService.Heartbeat:Wait()
         Nav.steer(wp.Position)
-        showDirectionIndicator(indicatorTarget or wp.Position)
 
         if tick() - lastCheck >= Nav.StuckInterval then
             if (RootPart.Position - lastPos).Magnitude < Nav.StuckDist then
@@ -9395,14 +9426,17 @@ function Nav.tweenAlong(points, timeout, isDone, state, jumps)
     local standH = Nav.standingHeight(hum, root)
     local up = Vector3.new(0, standH, 0)
     local n = #points
-    local indicatorTarget = points[n] + up
+    local indicatorPoints = {}
+    for _, point in ipairs(points) do
+        table.insert(indicatorPoints, point + up)
+    end
+    showDirectionPath(indicatorPoints)
     local idx = 1
     local groundParams = (not walk) and Nav.rayParams(Nav.worldIgnore()) or nil
     local jumpedIdx = 0
     local prevAutoJump = nil
     local faceDir = Vector3.zero -- arah hadap badan (mode jalan)
 
-    showDirectionIndicator(indicatorTarget)
 
     local gyro = nil
     if not walk then
@@ -9488,8 +9522,7 @@ function Nav.tweenAlong(points, timeout, isDone, state, jumps)
             lastDist = (g - root.Position).Magnitude
             lastCheck = tick()
             stuckChecks = 0
-            showDirectionIndicator(indicatorTarget)
-            continue
+                    continue
         end
 
         local dt = RunService.Heartbeat:Wait()
@@ -9547,7 +9580,6 @@ function Nav.tweenAlong(points, timeout, isDone, state, jumps)
         if gyro and flat.Magnitude > 0.5 then
             gyro.CFrame = CFrame.lookAt(pos, pos + flat)
         end
-        IndicatorBeam.targetPart.Position = indicatorTarget
 
         -- Watchdog progress ke titik aktif (dijeda selama stun)
         if isStunned() then
@@ -10020,7 +10052,7 @@ local function getWitchStandPosition()
 
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {Character, witch, ShopTarget, IndicatorBeam.targetPart}
+    params.FilterDescendantsInstances = {Character, witch, ShopTarget, IndicatorBeam.originPart}
 
     local origin = ref.Position + offset + Vector3.new(0, 5, 0)
     local result = workspace:Raycast(origin, Vector3.new(0, -80, 0), params)
