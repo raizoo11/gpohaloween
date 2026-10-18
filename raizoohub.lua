@@ -10763,34 +10763,61 @@ local function doChestOpen()
     return false
 end
 
--- Kick farm kalau item target baru masuk ke Backpack/Character.
+-- Kick farm saat item target baru muncul di data Inventory, sama seperti cek bait/ikan Fishing.
 local RareItemKickWatcherRunning = false
+local function rareInventoryCounts(data)
+    if type(data) ~= "table" then return nil end
+    local counts = {brand = 0, nightfall = 0}
+    for name, value in pairs(data) do
+        if type(name) == "string" then
+            local normalized = Webhook.trim(name):lower()
+            if normalized == "brand of sacrifice" then
+                counts.brand = Fishing.amount(data, name)
+            elseif normalized == "nightfall aura" then
+                counts.nightfall = Fishing.amount(data, name)
+            end
+        end
+    end
+    return counts
+end
+
 local function startRareItemKickWatcher()
     if RareItemKickWatcherRunning then return end
     RareItemKickWatcherRunning = true
     task.spawn(function()
-        local previous = Webhook.snapshot()
-        while Enabled do
+        -- Tunggu data inventory siap agar item lama tidak dianggap baru didapat.
+        local previous
+        while Enabled and not previous do
+            previous = rareInventoryCounts(Fishing.inventory())
+            if not previous then task.wait(0.5) end
+        end
+
+        while Enabled and previous do
             task.wait(0.5)
             if not Enabled then break end
 
-            local current = Webhook.snapshot()
-            for name, count in pairs(current) do
-                local normalized = Webhook.trim(Webhook.baseName(name)):lower()
-                local isTarget = normalized == "brand of sacrifice" or normalized == "nightfall aura"
-                if isTarget and count > (previous[name] or 0) then
+            local current = rareInventoryCounts(Fishing.inventory())
+            if current then
+                local obtained
+                if current.brand > previous.brand then
+                    obtained = "Brand of Sacrifice"
+                elseif current.nightfall > previous.nightfall then
+                    obtained = "Nightfall Aura"
+                end
+
+                if obtained then
                     Enabled = false
                     Webhook.setActive(false)
                     releaseAllMoveKeys()
                     disableMovementMode()
                     pcall(function()
-                        LocalPlayer:Kick(name .. " diperoleh; Halloween Farm dihentikan.")
+                        LocalPlayer:Kick(obtained .. " diperoleh; Halloween Farm dihentikan.")
                     end)
                     RareItemKickWatcherRunning = false
                     return
                 end
+                previous = current
             end
-            previous = current
         end
         RareItemKickWatcherRunning = false
     end)
