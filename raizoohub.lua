@@ -6138,7 +6138,6 @@ end
 -- ================= Settings (bisa diubah lewat GUI) =================
 local Settings = {
     SearchRadius = 50,
-    HoldDuration = 1,   -- durasi (detik) fire ProximityPrompt di tiap door
 
     WalkSpeed = 16,
     WalkSpeedEnabled = false,
@@ -8780,36 +8779,24 @@ local function getDoorPrompt(door)
     return frame:FindFirstChildWhichIsA("ProximityPrompt", true)
 end
 
--- Prompt hanya dipicu lewat fireproximityprompt; tidak ada input/tahan tombol E.
--- Return: true kalau prompt ketemu & dipicu minimal sekali
-local function triggerDoorPrompt(door, duration)
+-- Door prompt dipicu satu kali lewat fireproximityprompt; tidak ada input tombol E.
+local function triggerDoorPrompt(door)
     local prompt = getDoorPrompt(door)
     if not prompt then
         print("[AutoEventDoor] ProximityPrompt gak ketemu di eventDoor.Frame.")
         return false
     end
     if typeof(fireproximityprompt) ~= "function" then
-        print("[AutoEventDoor] fireproximityprompt gak tersedia; interaksi tombol E dinonaktifkan.")
+        print("[AutoEventDoor] fireproximityprompt gak tersedia; interaksi dilewati.")
         return false
     end
 
-    -- Kalau lagi stun (mis. sisa animasi sebelumnya), tunggu dulu
     waitUntilNotStunned()
-
-    local startTime = tick()
-    local fired = false
-    while Enabled and prompt.Parent and (tick() - startTime) < duration do
-        local ok = pcall(fireproximityprompt, prompt)
-        fired = fired or ok
-
-        -- Stun mulai setelah prompt kena (animasi ambil candy / diculik).
-        if fired and isStunned() then
-            break
-        end
-        task.wait(0.1)
+    local ok, err = pcall(fireproximityprompt, prompt)
+    if not ok then
+        print("[AutoEventDoor] Gagal fire proximity prompt: " .. tostring(err))
     end
-
-    return fired
+    return ok
 end
 
 -- ====================================================================
@@ -11038,11 +11025,10 @@ local function mainLoop()
                             end
                         end
 
-                        Stat.set("Fire prompt " .. label, function()
-                            return string.format("%.1f / %.0f detik", tick() - Stat.since, Settings.HoldDuration)
-                        end, "work")
-                        triggerDoorPrompt(door, Settings.HoldDuration)
-                        Webhook.count("doors", 1)
+                        Stat.set("Fire prompt " .. label, "sekali", "work")
+                        if triggerDoorPrompt(door) then
+                            Webhook.count("doors", 1)
+                        end
 
                         -- Jeda 5 detik setelah fire prompt, lalu tunggu stun selesai
                         -- sebelum tween / berjalan menuju door berikutnya.
