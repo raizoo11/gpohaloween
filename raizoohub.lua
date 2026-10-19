@@ -8780,24 +8780,16 @@ local function getDoorPrompt(door)
     return frame:FindFirstChildWhichIsA("ProximityPrompt", true)
 end
 
--- Fallback kalau executor gak punya fireproximityprompt: tap E manual
-local function tapKeyE()
-    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-    task.wait(0.05)
-    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
-    task.wait(0.05)
-end
-
--- Aktifin prompt event door berulang-ulang selama `duration` detik.
+-- Prompt hanya dipicu lewat fireproximityprompt; tidak ada input/tahan tombol E.
 -- Return: true kalau prompt ketemu & dipicu minimal sekali
 local function triggerDoorPrompt(door, duration)
     local prompt = getDoorPrompt(door)
     if not prompt then
-        print("[AutoEventDoor] ProximityPrompt gak ketemu di eventDoor.Frame, fallback ke tombol E.")
-        local startTime = tick()
-        while Enabled and (tick() - startTime) < duration do
-            tapKeyE()
-        end
+        print("[AutoEventDoor] ProximityPrompt gak ketemu di eventDoor.Frame.")
+        return false
+    end
+    if typeof(fireproximityprompt) ~= "function" then
+        print("[AutoEventDoor] fireproximityprompt gak tersedia; interaksi tombol E dinonaktifkan.")
         return false
     end
 
@@ -8806,31 +8798,15 @@ local function triggerDoorPrompt(door, duration)
 
     local startTime = tick()
     local fired = false
-
     while Enabled and prompt.Parent and (tick() - startTime) < duration do
-        if typeof(fireproximityprompt) == "function" then
-            -- Langsung trigger prompt, gak perlu tahan E & gak peduli jarak/hold duration
-            local ok = pcall(fireproximityprompt, prompt)
-            fired = fired or ok
-            task.wait(0.1)
-        else
-            -- Executor gak support: pakai API bawaan Roblox (hold sesuai HoldDuration prompt)
-            local ok = pcall(function()
-                prompt:InputHoldBegin()
-                task.wait(math.max(prompt.HoldDuration, 0.05) + 0.05)
-                prompt:InputHoldEnd()
-            end)
-            fired = fired or ok
-            if not ok then
-                tapKeyE()
-            end
-        end
+        local ok = pcall(fireproximityprompt, prompt)
+        fired = fired or ok
 
-        -- Stun mulai setelah fire = prompt sudah kena (animasi ambil candy /
-        -- diculik). Berhenti spam, caller yang nunggu stun habis.
+        -- Stun mulai setelah prompt kena (animasi ambil candy / diculik).
         if fired and isStunned() then
             break
         end
+        task.wait(0.1)
     end
 
     return fired
