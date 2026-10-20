@@ -8831,8 +8831,7 @@ local function disableMovementMode()
     releaseAllMoveKeys()
 end
 
--- ============ Indikator arah (visual aja) ============
--- Bersihkan indikator dari versi script sebelumnya agar tidak ada garis ganda.
+-- Bersihkan indikator arah dari script versi sebelumnya saat reload.
 for _, child in ipairs(workspace:GetChildren()) do
     if child.Name == "AutoEventDoorIndicatorOrigin"
         or child.Name == "AutoEventDoorIndicatorTarget"
@@ -8840,126 +8839,6 @@ for _, child in ipairs(workspace:GetChildren()) do
         or child.Name == "AutoEventDoorIndicatorEndpoint" then
         child:Destroy()
     end
-end
-
--- Rangkaian beam mengikuti seluruh waypoint hingga tujuan akhir.
-local IndicatorBeam
-do
-    local originPart = Instance.new("Part")
-    originPart.Name = "AutoEventDoorIndicatorOrigin"
-    originPart.Size = Vector3.new(0.2, 0.2, 0.2)
-    originPart.Transparency = 1
-    originPart.CanCollide = false
-    originPart.CanQuery = false
-    originPart.CanTouch = false
-    originPart.Anchored = true
-    originPart.Parent = workspace
-
-    RunService.Heartbeat:Connect(function()
-        if RootPart and RootPart.Parent then
-            originPart.CFrame = RootPart.CFrame
-        end
-    end)
-
-    local originAttachment = Instance.new("Attachment")
-    originAttachment.Parent = originPart
-
-    local endpoint = Instance.new("Part")
-    endpoint.Name = "AutoEventDoorIndicatorEndpoint"
-    endpoint.Shape = Enum.PartType.Ball
-    endpoint.Size = Vector3.new(0.38, 0.38, 0.38)
-    endpoint.Material = Enum.Material.Neon
-    endpoint.Color = Color3.fromRGB(255, 194, 105)
-    endpoint.Transparency = 1
-    endpoint.CastShadow = false
-    endpoint.Anchored = true
-    endpoint.CanCollide = false
-    endpoint.CanQuery = false
-    endpoint.CanTouch = false
-    endpoint.Parent = workspace
-
-    local endpointLight = Instance.new("PointLight")
-    endpointLight.Color = endpoint.Color
-    endpointLight.Brightness = 0.55
-    endpointLight.Range = 5
-    endpointLight.Enabled = false
-    endpointLight.Parent = endpoint
-
-    IndicatorBeam = {
-        originPart = originPart,
-        originAttachment = originAttachment,
-        endpoint = endpoint,
-        endpointLight = endpointLight,
-        segments = {},
-    }
-end
-
-local function createIndicatorSegment(index)
-    local node = Instance.new("Part")
-    node.Name = "AutoEventDoorIndicatorNode"
-    node.Size = Vector3.new(0.2, 0.2, 0.2)
-    node.Transparency = 1
-    node.CanCollide = false
-    node.CanQuery = false
-    node.CanTouch = false
-    node.Anchored = true
-    node.Parent = workspace
-
-    local attachment = Instance.new("Attachment")
-    attachment.Parent = node
-
-    local beam = Instance.new("Beam")
-    beam.Width0 = 0.13
-    beam.Width1 = 0.045
-    beam.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 205, 130)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 174, 92)),
-    })
-    beam.Transparency = NumberSequence.new({
-        NumberSequenceKeypoint.new(0, 0.62),
-        NumberSequenceKeypoint.new(0.72, 0.38),
-        NumberSequenceKeypoint.new(1, 0.12),
-    })
-    beam.LightEmission = 0.25
-    beam.LightInfluence = 0
-    beam.FaceCamera = true
-    beam.Enabled = false
-    beam.Parent = IndicatorBeam.originPart
-
-    local segment = {node = node, attachment = attachment, beam = beam}
-    IndicatorBeam.segments[index] = segment
-    return segment
-end
-
-local function showDirectionPath(points)
-    local count = #points
-    for index = 1, count do
-        local segment = IndicatorBeam.segments[index] or createIndicatorSegment(index)
-        segment.node.Position = points[index]
-        segment.beam.Attachment0 = index == 1
-            and IndicatorBeam.originAttachment
-            or IndicatorBeam.segments[index - 1].attachment
-        segment.beam.Attachment1 = segment.attachment
-        segment.beam.Enabled = true
-    end
-
-    for index = count + 1, #IndicatorBeam.segments do
-        IndicatorBeam.segments[index].beam.Enabled = false
-    end
-
-    if count > 0 then
-        IndicatorBeam.endpoint.Position = points[count]
-        IndicatorBeam.endpoint.Transparency = 0.12
-        IndicatorBeam.endpointLight.Enabled = true
-    end
-end
-
-local function hideDirectionIndicator()
-    for _, segment in ipairs(IndicatorBeam.segments) do
-        segment.beam.Enabled = false
-    end
-    IndicatorBeam.endpoint.Transparency = 1
-    IndicatorBeam.endpointLight.Enabled = false
 end
 
 -- ============ Geppo / Sky Walk (dipanggil dari tween & mainLoop) ============
@@ -9301,11 +9180,6 @@ end
 -- Return: "Arrived" | "Finished" | "Blocked" | "Stuck" | "Stopped"
 function Nav.followWalk(waypoints, isDone, state)
     local i, n = 1, #waypoints
-    local indicatorPoints = {}
-    for _, waypoint in ipairs(waypoints) do
-        table.insert(indicatorPoints, waypoint.Position)
-    end
-    showDirectionPath(indicatorPoints)
     local segStart = tick()
     local lastPos, lastCheck = RootPart.Position, tick()
     local strikes = 0
@@ -9313,7 +9187,6 @@ function Nav.followWalk(waypoints, isDone, state)
 
     local function finish(status)
         releaseAllMoveKeys()
-        hideDirectionIndicator()
         return status
     end
 
@@ -9399,11 +9272,6 @@ function Nav.tweenAlong(points, timeout, isDone, state, jumps)
     local standH = Nav.standingHeight(hum, root)
     local up = Vector3.new(0, standH, 0)
     local n = #points
-    local indicatorPoints = {}
-    for _, point in ipairs(points) do
-        table.insert(indicatorPoints, point + up)
-    end
-    showDirectionPath(indicatorPoints)
     local idx = 1
     local groundParams = (not walk) and Nav.rayParams(Nav.worldIgnore()) or nil
     local jumpedIdx = 0
@@ -9590,7 +9458,6 @@ function Nav.tweenAlong(points, timeout, isDone, state, jumps)
             hum.AutoRotate = true
         end
     end)
-    hideDirectionIndicator()
 
     return reached, reason
 end
@@ -10025,7 +9892,7 @@ local function getWitchStandPosition()
 
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = {Character, witch, ShopTarget, IndicatorBeam.originPart}
+    params.FilterDescendantsInstances = {Character, witch, ShopTarget}
 
     local origin = ref.Position + offset + Vector3.new(0, 5, 0)
     local result = workspace:Raycast(origin, Vector3.new(0, -80, 0), params)
