@@ -5867,7 +5867,7 @@ function MacLib:Demo()
 		Text = "Sub-Label. Lorem ipsum odor amet, consectetuer adipiscing elit."
 	})
 
-	MacLib:SetFolder("Maclib")
+	MacLib:SetFolder("RaizooHub_" .. tostring(LocalPlayer.UserId))
 	tabs.Settings:InsertConfigSection("Left")
 
 	Window.onUnloaded(function()
@@ -5875,7 +5875,7 @@ function MacLib:Demo()
 	end)
 
 	tabs.Main:Select()
-	MacLib:LoadAutoLoadConfig()
+	-- Autoload dijalankan lagi setelah widget RaizooHub selesai dibuat.
 end
 
 return MacLib
@@ -5889,6 +5889,7 @@ local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LocalPlayer = Players.LocalPlayer
+local UserConfig = { Folder = "RaizooHub_" .. tostring(LocalPlayer.UserId) }
 
 -- ================= Auto Join Private Server (First Sea) =================
 -- Alur (sama kayak hub), dijalankan di MAIN MENU (PlaceId 1730877806):
@@ -5906,7 +5907,7 @@ local LocalPlayer = Players.LocalPlayer
 local PrivateServer = {
     MainMenuPlaceId = 1730877806,
     FirstSeaPlaceId = 3978370137,
-    ConfigFile = "AutoEventDoor_PrivateServer.json",
+    ConfigFile = UserConfig.Folder .. "/AutoEventDoor_PrivateServer.json",
     RetryInterval = 8,   -- detik antar percobaan join
     ReexecuteUrl = "",   -- opsional: URL raw script ini, buat di-queue_on_teleport
     Enabled = false,
@@ -6429,7 +6430,7 @@ end
 -- Ringkasan: tiap 1 jam dikirim embed ringkasan (door, chest, merchant, item, candy, durasi aktif).
 -- URL + toggle diatur dari GUI & disimpan ke file. Bungkus 1 table biar hemat local.
 local Webhook = {
-    ConfigFile = "AutoEventDoor_Webhook.json",
+    ConfigFile = UserConfig.Folder .. "/AutoEventDoor_Webhook.json",
     Url = "",
     Enabled = true,
     Interval = 1.5,
@@ -6586,6 +6587,54 @@ end
 -- Cocok kalau SEMUA kata sebuah entri Webhook.Rare muncul berurutan penuh di nama item
 -- (per kata utuh, bukan potongan huruf: "Hie" gak kena "Thief", "Ito" gak kena "Mito").
 -- Entri dipisah koma / baris baru; awalan jumlah ("1x Goro") diabaikan.
+-- Daftar tool yang bisa dipilih untuk ping @everyone.
+function Webhook.toolOptions()
+    local options, seen = {}, {}
+    local function add(name)
+        if type(name) ~= "string" then return end
+        name = Webhook.trim(name)
+        if name ~= "" and not seen[name] then
+            seen[name] = true
+            table.insert(options, name)
+        end
+    end
+
+    local tools = ReplicatedStorage:FindFirstChild("Tools")
+    if tools then
+        for _, item in ipairs(tools:GetDescendants()) do
+            if item:IsA("Tool") then add(item.Name) end
+        end
+        if #options == 0 then
+            for _, item in ipairs(tools:GetChildren()) do
+                if not item:IsA("Folder") then add(item.Name) end
+            end
+        end
+    end
+
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    local character = LocalPlayer.Character
+    for _, container in pairs({backpack, character}) do
+        if container then
+            for _, item in ipairs(container:GetChildren()) do
+                if item:IsA("Tool") then add(item.Name) end
+            end
+        end
+    end
+
+    for entry in string.gmatch(Webhook.Rare or "", "[^,\n]+") do add(entry) end
+    table.sort(options)
+    return options
+end
+
+function Webhook.pingDefaults()
+    local selected = {}
+    for entry in string.gmatch(Webhook.Rare or "", "[^,\n]+") do
+        entry = Webhook.trim(entry)
+        if entry ~= "" then table.insert(selected, entry) end
+    end
+    return selected
+end
+
 function Webhook.isRare(name)
     local nameTokens = Webhook.tokens(name)
     for entry in string.gmatch(Webhook.Rare or "", "[^,\n]+") do
@@ -6942,7 +6991,7 @@ end
 -- diam: sebelum cari door / saat nunggu cooldown), jadi gak bentrok sama gerak, fire prompt, atau
 -- basket. Default MATI; pengaturan tersimpan ke file.
 local Drop = {
-    ConfigFile = "AutoEventDoor_Drop.json",
+    ConfigFile = UserConfig.Folder .. "/AutoEventDoor_Drop.json",
     running = false,
     manual = false,           -- true = lagi jalan dari tombol "Drop sekarang" waktu farm OFF
     now = false,              -- permintaan "Drop sekarang" waktu farm ON (dijalankan mainLoop)
@@ -8583,8 +8632,57 @@ UI.MacButton(UI.MacSections.Webhook, "Kirim ringkasan", function()
     Webhook.save()
     if Webhook.valid() then Webhook.sendSummary(true) end
 end)
-UI.MacInput(UI.MacSections.Webhook, "Ping item langka", Webhook.RareBox, "Nama item, pisah koma")
+UI.MacState.WebhookPingTools = UI.MacSections.Webhook:Dropdown({
+    Name = "Daftar tool ping @everyone",
+    Search = true,
+    Multi = true,
+    Required = false,
+    Options = Webhook.toolOptions(),
+    Default = Webhook.pingDefaults(),
+    Callback = function(selected)
+        local names = {}
+        for name, enabled in pairs(selected or {}) do
+            if enabled then table.insert(names, name) end
+        end
+        table.sort(names)
+        Webhook.Rare = table.concat(names, ", ")
+        if Webhook.RareBox then Webhook.RareBox.Text = Webhook.Rare end
+        Webhook.save()
+    end,
+}, "WebhookPingTools")
+UI.MacInput(UI.MacSections.Webhook, "Item ping @everyone (manual)", Webhook.RareBox,
+    "Nama item, pisah koma")
 UI.MacTabs.Farm:Select()
+
+-- Config UI disimpan otomatis per UserId, dan dipulihkan setelah semua widget terdaftar.
+UserConfig.startAutoSave = function()
+    local settingsPath = UserConfig.Folder .. "/settings"
+    local autoPath = settingsPath .. "/autosave.json"
+    local autoloadPath = settingsPath .. "/autoload.txt"
+
+    if typeof(isfile) == "function" and typeof(writefile) == "function" then
+        pcall(function()
+            if not isfile(autoPath) then MacLib:SaveConfig("autosave") end
+            if not isfile(autoloadPath) then writefile(autoloadPath, "autosave") end
+            MacLib:LoadAutoLoadConfig()
+        end)
+    end
+
+    task.spawn(function()
+        while true do
+            task.wait(5)
+            pcall(function() MacLib:SaveConfig("autosave") end)
+            pcall(PrivateServer.save)
+            pcall(function()
+                Webhook.Url = Webhook.trim(Webhook.UrlBox.Text)
+                Webhook.Rare = Webhook.trim(Webhook.RareBox.Text)
+                Webhook.save()
+            end)
+            pcall(Drop.save)
+        end
+    end)
+end
+UserConfig.startAutoSave()
 
 -- RightShift: sembunyikan / tampilkan GUI (script tetap jalan)
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
