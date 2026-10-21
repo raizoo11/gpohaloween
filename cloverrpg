@@ -296,6 +296,9 @@ Lighting.ChildAdded:Connect(function(obj)
     end
 end)
 
+local ESP = {}
+do
+
 ----------------------------------------------------------------
 -- ESP: PLAYERS (nametag + HP angka, tanpa bar)
 ----------------------------------------------------------------
@@ -1065,6 +1068,20 @@ local function toggleCropESP()
         end
     end
 end
+
+ESP.playerEnabled = function() return playerEspEnabled end
+ESP.togglePlayer = togglePlayerESP
+ESP.npcEnabled = function() return npcEspEnabled end
+ESP.toggleNpc = toggleNpcESP
+ESP.npcsEnabled = function() return npcsEspEnabled end
+ESP.toggleNpcs = toggleNpcsESP
+ESP.chestEnabled = function() return chestEspEnabled end
+ESP.toggleChest = toggleChestESP
+ESP.oreEnabled = function() return oreEspEnabled end
+ESP.toggleOre = toggleOreESP
+ESP.cropEnabled = function() return cropEspEnabled end
+ESP.toggleCrop = toggleCropESP
+end -- ESP local scope
 
 ----------------------------------------------------------------
 -- FARM MOB (TP Above/Behind/Bottom via slider offsets, auto search & refresh, range 70 studs, anti-aerial)
@@ -2143,12 +2160,12 @@ local function createEspToggleRow(yPos, label, isOnFn, toggleFn)
     return btn
 end
 
-createEspToggleRow(0, "Player ESP", function() return playerEspEnabled end, togglePlayerESP)
-createEspToggleRow(38, "FightableNPCS ESP", function() return npcEspEnabled end, toggleNpcESP)
-createEspToggleRow(76, "NPCS ESP", function() return npcsEspEnabled end, toggleNpcsESP)
-createEspToggleRow(114, "Closed Chest ESP", function() return chestEspEnabled end, toggleChestESP)
-createEspToggleRow(152, "Ore ESP", function() return oreEspEnabled end, toggleOreESP)
-createEspToggleRow(190, "Crop ESP", function() return cropEspEnabled end, toggleCropESP)
+createEspToggleRow(0, "Player ESP", ESP.playerEnabled, ESP.togglePlayer)
+createEspToggleRow(38, "FightableNPCS ESP", ESP.npcEnabled, ESP.toggleNpc)
+createEspToggleRow(76, "NPCS ESP", ESP.npcsEnabled, ESP.toggleNpcs)
+createEspToggleRow(114, "Closed Chest ESP", ESP.chestEnabled, ESP.toggleChest)
+createEspToggleRow(152, "Ore ESP", ESP.oreEnabled, ESP.toggleOre)
+createEspToggleRow(190, "Crop ESP", ESP.cropEnabled, ESP.toggleCrop)
 
 local espInfo = Instance.new("TextLabel")
 espInfo.Size = UDim2.new(1, 0, 0, 140)
