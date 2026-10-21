@@ -1070,6 +1070,109 @@ local function toggleCropESP()
     end
 end
 
+----------------------------------------------------------------
+-- ESP: SPHINX (semua model sphinx dalam workspace.ChatObjects.SphinxRiddles)
+----------------------------------------------------------------
+local sphinxEspEnabled = false
+local SPHINX_COLOR = Color3.fromRGB(255, 190, 50)
+local sphinxObjects = {}
+
+local function removeSphinxESP(model)
+    local data = sphinxObjects[model]
+    if not data then return end
+    if data.highlight then data.highlight:Destroy() end
+    if data.billboard then data.billboard:Destroy() end
+    if data.conn then data.conn:Disconnect() end
+    sphinxObjects[model] = nil
+end
+
+local function applySphinxESP(model)
+    if sphinxObjects[model] or not model:IsA("Model") then return end
+    local lowerName = string.lower(model.Name)
+    if not string.find(lowerName, "sphinx", 1, true) then return end
+
+    local part = model:FindFirstChild("HumanoidRootPart", true)
+        or model.PrimaryPart
+        or model:FindFirstChildWhichIsA("BasePart", true)
+    if not part then return end
+
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "CloverSphinxESP"
+    highlight.FillColor = SPHINX_COLOR
+    highlight.OutlineColor = Color3.new(1, 1, 1)
+    highlight.FillTransparency = 0.55
+    highlight.OutlineTransparency = 0
+    highlight.Adornee = model
+    highlight.Parent = model
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "CloverSphinxESP"
+    billboard.Size = UDim2.new(0, 180, 0, 22)
+    billboard.StudsOffset = Vector3.new(0, 3, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Adornee = part
+    billboard.Parent = part
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.fromScale(1, 1)
+    label.BackgroundTransparency = 1
+    label.TextColor3 = SPHINX_COLOR
+    label.TextStrokeTransparency = 0
+    label.TextScaled = true
+    label.Font = Enum.Font.GothamBold
+    label.Parent = billboard
+
+    local conn = RunService.Heartbeat:Connect(function()
+        if not model:IsDescendantOf(workspace) or not part.Parent then return end
+        local char = LocalPlayer.Character
+        local myRoot = char and char:FindFirstChild("HumanoidRootPart")
+        if myRoot then
+            local distance = (myRoot.Position - part.Position).Magnitude
+            label.Text = string.format("%s [%dm]", model.Name, math.floor(distance))
+        else
+            label.Text = model.Name
+        end
+    end)
+
+    sphinxObjects[model] = { highlight = highlight, billboard = billboard, conn = conn }
+end
+
+local function scanSphinx()
+    local chatObjects = workspace:FindFirstChild("ChatObjects")
+    local folder = chatObjects and chatObjects:FindFirstChild("SphinxRiddles")
+    if not folder then
+        for model in pairs(sphinxObjects) do removeSphinxESP(model) end
+        return
+    end
+
+    local found = {}
+    for _, inst in ipairs(folder:GetDescendants()) do
+        if inst:IsA("Model") and string.find(string.lower(inst.Name), "sphinx", 1, true) then
+            found[inst] = true
+            applySphinxESP(inst)
+        end
+    end
+    for model in pairs(sphinxObjects) do
+        if not found[model] then removeSphinxESP(model) end
+    end
+end
+
+task.spawn(function()
+    while true do
+        if sphinxEspEnabled then scanSphinx() end
+        task.wait(1)
+    end
+end)
+
+local function toggleSphinxESP()
+    sphinxEspEnabled = not sphinxEspEnabled
+    if sphinxEspEnabled then
+        scanSphinx()
+    else
+        for model in pairs(sphinxObjects) do removeSphinxESP(model) end
+    end
+end
+
 ESP.playerEnabled = function() return playerEspEnabled end
 ESP.togglePlayer = togglePlayerESP
 ESP.npcEnabled = function() return npcEspEnabled end
@@ -1082,6 +1185,8 @@ ESP.oreEnabled = function() return oreEspEnabled end
 ESP.toggleOre = toggleOreESP
 ESP.cropEnabled = function() return cropEspEnabled end
 ESP.toggleCrop = toggleCropESP
+ESP.sphinxEnabled = function() return sphinxEspEnabled end
+ESP.toggleSphinx = toggleSphinxESP
 end -- ESP local scope
 
 ----------------------------------------------------------------
@@ -7297,9 +7402,10 @@ addEspToggle(espLeft, "NPC ESP", ESP.npcsEnabled, ESP.toggleNpcs, "NPCESP")
 addEspToggle(espRight, "Closed Chest ESP", ESP.chestEnabled, ESP.toggleChest, "ChestESP")
 addEspToggle(espRight, "Ore ESP", ESP.oreEnabled, ESP.toggleOre, "OreESP")
 addEspToggle(espRight, "Crop ESP", ESP.cropEnabled, ESP.toggleCrop, "CropESP")
+addEspToggle(espRight, "Sphinx ESP", ESP.sphinxEnabled, ESP.toggleSphinx, "SphinxESP")
 espRight:Paragraph({
     Header = "Tracked objects",
-    Body = "Semua ESP mulai OFF. Aktifkan yang diperlukan satu per satu: players, NPC, chest, ore, atau crop.",
+    Body = "Semua ESP mulai OFF. Aktifkan yang diperlukan satu per satu: players, NPC, chest, ore, crop, atau Sphinx.",
 })
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
