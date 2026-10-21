@@ -7102,7 +7102,7 @@ local MacLib = loadMacLib()
 local Window = MacLib:Window({
     Title = "Grand Clover",
     Subtitle = "CloverRPG",
-    Size = UDim2.fromOffset(520, 440),
+    Size = UDim2.fromOffset(760, 560),
     DragStyle = 1,
     DisabledWindowControls = {},
     ShowUserInfo = false,
@@ -7144,7 +7144,11 @@ local function setFarmState(state)
 end
 
 local function setVisualState(state)
-    if visualEnabled ~= state then toggleVisual() end
+    state = state == true
+    if visualEnabled ~= state then
+        visualEnabled = state
+        applyVisual()
+    end
 end
 
 moveLeft:Header({ Name = "Movement" })
@@ -7277,7 +7281,8 @@ local function addEspToggle(section, name, getState, toggle, flag)
         Name = name,
         Default = getState(),
         Callback = function(value)
-            if getState() ~= value then toggle() end
+            local enabled = value == true
+            if getState() ~= enabled then toggle() end
         end,
     }, flag)
 end
@@ -7290,7 +7295,7 @@ addEspToggle(espRight, "Ore ESP", ESP.oreEnabled, ESP.toggleOre, "OreESP")
 addEspToggle(espRight, "Crop ESP", ESP.cropEnabled, ESP.toggleCrop, "CropESP")
 espRight:Paragraph({
     Header = "Tracked objects",
-    Body = "Players, NPC, chest, ore, dan crop yang terdeteksi di workspace.",
+    Body = "Semua ESP mulai OFF. Aktifkan yang diperlukan satu per satu: players, NPC, chest, ore, atau crop.",
 })
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
