@@ -1,4 +1,5 @@
--- ================= UNIVERSAL SCRIPT: WALKSPEED + NOCLIP + VISUAL + ESP =================
+-- ================= GRAND CLOVER SCRIPT =================
+-- WalkSpeed + Noclip + Fly (network-owner fix) + Farm Mob (slider offsets, 70 stud, anti-aerial) + Visual (NoFog/FullBright/NoAtmosphere) + ESP (Player/FightableNPCS/NPCS/Closed_Chest/Ores/Crops)
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -9,6 +10,8 @@ local CoreGui = game:GetService("CoreGui")
 local LocalPlayer = Players.LocalPlayer
 local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local humanoid = character:WaitForChild("Humanoid")
+local rootPart = character:WaitForChild("HumanoidRootPart")
+local camera = workspace.CurrentCamera
 
 ----------------------------------------------------------------
 -- WALKSPEED
@@ -37,6 +40,11 @@ local function watchWalkSpeed(hum)
     end)
 end
 watchWalkSpeed(humanoid)
+
+local function toggleWalkSpeed()
+    walkSpeedEnabled = not walkSpeedEnabled
+    applyWalkSpeed()
+end
 
 ----------------------------------------------------------------
 -- NOCLIP
@@ -82,20 +90,117 @@ local function toggleNoclip()
     end
 end
 
-LocalPlayer.CharacterAdded:Connect(function(newChar)
-    character = newChar
-    humanoid = newChar:WaitForChild("Humanoid")
-    applyWalkSpeed()
-    watchWalkSpeed(humanoid)
-    if noclipEnabled then
-        startNoclip()
+----------------------------------------------------------------
+-- FLY (dengan fix rubberband: SetNetworkOwner ke client)
+----------------------------------------------------------------
+local FLY_SPEED_VALUE = 50
+local flyEnabled = false
+local flyKeybind = Enum.KeyCode.F3
+local capturingFlyKeybind = false
+
+local bodyVelocity = nil
+local bodyGyro = nil
+local flyConn = nil
+
+local keysHeld = {
+    W = false, A = false, S = false, D = false,
+    Up = false, Down = false,
+}
+
+local function startFly()
+    if flyEnabled then return end
+    flyEnabled = true
+
+    humanoid.PlatformStand = true
+
+    pcall(function()
+        rootPart:SetNetworkOwner(LocalPlayer)
+    end)
+
+    bodyVelocity = Instance.new("BodyVelocity")
+    bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    bodyVelocity.Velocity = Vector3.new(0, 0, 0)
+    bodyVelocity.Parent = rootPart
+
+    bodyGyro = Instance.new("BodyGyro")
+    bodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    bodyGyro.P = 3000
+    bodyGyro.D = 100
+    bodyGyro.Parent = rootPart
+
+    flyConn = RunService.Heartbeat:Connect(function()
+        if not rootPart or not rootPart.Parent then return end
+
+        local camCFrame = camera.CFrame
+        local moveDir = Vector3.new(0, 0, 0)
+
+        local flatLook = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z)
+        if flatLook.Magnitude > 0 then flatLook = flatLook.Unit end
+        local flatRight = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z)
+        if flatRight.Magnitude > 0 then flatRight = flatRight.Unit end
+
+        if keysHeld.W then moveDir += flatLook end
+        if keysHeld.S then moveDir -= flatLook end
+        if keysHeld.D then moveDir += flatRight end
+        if keysHeld.A then moveDir -= flatRight end
+
+        local verticalDir = 0
+        if keysHeld.Up then verticalDir += 1 end
+        if keysHeld.Down then verticalDir -= 1 end
+
+        if moveDir.Magnitude > 0 then
+            moveDir = moveDir.Unit
+        end
+
+        local finalVelocity = (moveDir * FLY_SPEED_VALUE) + Vector3.new(0, verticalDir * FLY_SPEED_VALUE, 0)
+        bodyVelocity.Velocity = finalVelocity
+
+        bodyGyro.CFrame = CFrame.new(rootPart.Position, rootPart.Position + camCFrame.LookVector)
+    end)
+end
+
+local function stopFly()
+    if not flyEnabled then return end
+    flyEnabled = false
+
+    if flyConn then
+        flyConn:Disconnect()
+        flyConn = nil
     end
-end)
+    if bodyVelocity then
+        bodyVelocity:Destroy()
+        bodyVelocity = nil
+    end
+    if bodyGyro then
+        bodyGyro:Destroy()
+        bodyGyro = nil
+    end
+    if humanoid then
+        humanoid.PlatformStand = false
+    end
+
+    pcall(function()
+        rootPart:SetNetworkOwnershipAuto()
+    end)
+
+    for k in pairs(keysHeld) do
+        keysHeld[k] = false
+    end
+end
+
+local function toggleFly()
+    if flyEnabled then
+        stopFly()
+    else
+        startFly()
+    end
+end
 
 ----------------------------------------------------------------
--- VISUAL: NOFOG + FULLBRIGHT
+-- VISUAL: NOFOG + FULLBRIGHT + NO ATMOSPHERE
 ----------------------------------------------------------------
 local visualEnabled = false
+local savedAtmosphereData = {}
 
 local originalLighting = {
     FogEnd = Lighting.FogEnd,
@@ -105,17 +210,54 @@ local originalLighting = {
     Ambient = Lighting.Ambient,
     OutdoorAmbient = Lighting.OutdoorAmbient,
     GlobalShadows = Lighting.GlobalShadows,
+    ExposureCompensation = Lighting.ExposureCompensation,
 }
+
+local function neutralizeAtmosphere()
+    for _, obj in ipairs(Lighting:GetChildren()) do
+        if obj:IsA("Atmosphere") and not savedAtmosphereData[obj] then
+            savedAtmosphereData[obj] = {
+                Density = obj.Density,
+                Offset = obj.Offset,
+                Color = obj.Color,
+                Decay = obj.Decay,
+                Glare = obj.Glare,
+                Haze = obj.Haze,
+            }
+            obj.Density = 0
+            obj.Offset = 0
+            obj.Decay = Color3.new(0, 0, 0)
+            obj.Glare = 0
+            obj.Haze = 0
+        end
+    end
+end
+
+local function restoreAtmosphere()
+    for obj, data in pairs(savedAtmosphereData) do
+        if obj and obj.Parent then
+            obj.Density = data.Density
+            obj.Offset = data.Offset
+            obj.Color = data.Color
+            obj.Decay = data.Decay
+            obj.Glare = data.Glare
+            obj.Haze = data.Haze
+        end
+    end
+    savedAtmosphereData = {}
+end
 
 local function applyVisual()
     if visualEnabled then
         Lighting.FogEnd = 100000
         Lighting.FogStart = 0
-        Lighting.Brightness = 2
+        Lighting.Brightness = 3
         Lighting.ClockTime = 14
-        Lighting.Ambient = Color3.fromRGB(200, 200, 200)
-        Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
+        Lighting.Ambient = Color3.fromRGB(255, 255, 255)
+        Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
         Lighting.GlobalShadows = false
+        Lighting.ExposureCompensation = 1
+        neutralizeAtmosphere()
     else
         Lighting.FogEnd = originalLighting.FogEnd
         Lighting.FogStart = originalLighting.FogStart
@@ -124,7 +266,14 @@ local function applyVisual()
         Lighting.Ambient = originalLighting.Ambient
         Lighting.OutdoorAmbient = originalLighting.OutdoorAmbient
         Lighting.GlobalShadows = originalLighting.GlobalShadows
+        Lighting.ExposureCompensation = originalLighting.ExposureCompensation
+        restoreAtmosphere()
     end
+end
+
+local function toggleVisual()
+    visualEnabled = not visualEnabled
+    applyVisual()
 end
 
 task.spawn(function()
@@ -132,111 +281,23 @@ task.spawn(function()
         if visualEnabled then
             if Lighting.FogEnd ~= 100000 then Lighting.FogEnd = 100000 end
             if Lighting.FogStart ~= 0 then Lighting.FogStart = 0 end
-            if Lighting.Brightness ~= 2 then Lighting.Brightness = 2 end
+            if Lighting.Brightness ~= 3 then Lighting.Brightness = 3 end
+            if Lighting.ExposureCompensation ~= 1 then Lighting.ExposureCompensation = 1 end
+            neutralizeAtmosphere()
         end
         task.wait(1)
     end
 end)
 
-----------------------------------------------------------------
--- ESP: TRINKET SPAWNS (workspace.TrinketSpawns)
-----------------------------------------------------------------
-local trinketEspEnabled = true
-local TRINKET_COLOR = Color3.fromRGB(255, 215, 0)
-local trinketObjects = {}
-
-local function removeTrinketESP(inst)
-    local data = trinketObjects[inst]
-    if data then
-        if data.highlight then data.highlight:Destroy() end
-        if data.billboard then data.billboard:Destroy() end
-        if data.conn then data.conn:Disconnect() end
-        trinketObjects[inst] = nil
+Lighting.ChildAdded:Connect(function(obj)
+    if visualEnabled and obj:IsA("Atmosphere") then
+        task.wait(0.1)
+        neutralizeAtmosphere()
     end
-end
-
-local function applyTrinketESP(inst)
-    if trinketObjects[inst] then return end
-
-    local part = inst:IsA("BasePart") and inst or inst:FindFirstChildWhichIsA("BasePart")
-    if not part then return end
-
-    local highlight = Instance.new("Highlight")
-    highlight.FillColor = TRINKET_COLOR
-    highlight.OutlineColor = Color3.new(1, 1, 1)
-    highlight.FillTransparency = 0.3
-    highlight.OutlineTransparency = 0
-    highlight.Parent = inst
-
-    local billboard = Instance.new("BillboardGui")
-    billboard.Size = UDim2.new(0, 180, 0, 40)
-    billboard.StudsOffset = Vector3.new(0, 2, 0)
-    billboard.AlwaysOnTop = true
-    billboard.Adornee = part
-    billboard.Parent = part
-
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, 0, 1, 0)
-    label.BackgroundTransparency = 1
-    label.TextColor3 = TRINKET_COLOR
-    label.TextStrokeTransparency = 0
-    label.TextScaled = true
-    label.Font = Enum.Font.GothamBold
-    label.Text = inst.Name
-    label.Parent = billboard
-
-    local conn = RunService.Heartbeat:Connect(function()
-        local char = LocalPlayer.Character
-        if char and char:FindFirstChild("HumanoidRootPart") and part.Parent then
-            local dist = (char.HumanoidRootPart.Position - part.Position).Magnitude
-            label.Text = string.format("%s [%dm]", inst.Name, math.floor(dist))
-        end
-    end)
-
-    trinketObjects[inst] = { highlight = highlight, billboard = billboard, conn = conn }
-end
-
-local function scanTrinketSpawns()
-    local folder = workspace:FindFirstChild("TrinketSpawns")
-    if not folder then return end
-    if trinketEspEnabled then
-        for _, child in ipairs(folder:GetChildren()) do
-            applyTrinketESP(child)
-        end
-    end
-end
-
-local trinketFolder = workspace:FindFirstChild("TrinketSpawns")
-if trinketFolder then
-    trinketFolder.ChildAdded:Connect(function(child)
-        if trinketEspEnabled then
-            task.wait(0.1)
-            applyTrinketESP(child)
-        end
-    end)
-    trinketFolder.ChildRemoved:Connect(function(child)
-        removeTrinketESP(child)
-    end)
-end
-
-task.spawn(function()
-    task.wait(1)
-    scanTrinketSpawns()
 end)
 
-local function toggleTrinketESP()
-    trinketEspEnabled = not trinketEspEnabled
-    if trinketEspEnabled then
-        scanTrinketSpawns()
-    else
-        for inst, _ in pairs(trinketObjects) do
-            removeTrinketESP(inst)
-        end
-    end
-end
-
 ----------------------------------------------------------------
--- ESP: PLAYERS (nametag + HP)
+-- ESP: PLAYERS (nametag + HP angka, tanpa bar)
 ----------------------------------------------------------------
 local playerEspEnabled = true
 local PLAYER_COLOR = Color3.fromRGB(0, 255, 100)
@@ -270,14 +331,14 @@ local function applyPlayerESP(plr)
     highlight.Parent = char
 
     local billboard = Instance.new("BillboardGui")
-    billboard.Size = UDim2.new(0, 160, 0, 50)
+    billboard.Size = UDim2.new(0, 160, 0, 34)
     billboard.StudsOffset = Vector3.new(0, 3, 0)
     billboard.AlwaysOnTop = true
     billboard.Adornee = root
     billboard.Parent = root
 
     local nameLabel = Instance.new("TextLabel")
-    nameLabel.Size = UDim2.new(1, 0, 0, 20)
+    nameLabel.Size = UDim2.new(1, 0, 0, 18)
     nameLabel.Position = UDim2.new(0, 0, 0, 0)
     nameLabel.BackgroundTransparency = 1
     nameLabel.TextColor3 = PLAYER_COLOR
@@ -287,37 +348,21 @@ local function applyPlayerESP(plr)
     nameLabel.Text = plr.Name
     nameLabel.Parent = billboard
 
-    local hpBarBg = Instance.new("Frame")
-    hpBarBg.Size = UDim2.new(1, 0, 0, 8)
-    hpBarBg.Position = UDim2.new(0, 0, 0, 22)
-    hpBarBg.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-    hpBarBg.BorderSizePixel = 0
-    hpBarBg.Parent = billboard
-
-    local hpBarFill = Instance.new("Frame")
-    hpBarFill.Size = UDim2.new(1, 0, 1, 0)
-    hpBarFill.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
-    hpBarFill.BorderSizePixel = 0
-    hpBarFill.Parent = hpBarBg
-
     local hpLabel = Instance.new("TextLabel")
-    hpLabel.Size = UDim2.new(1, 0, 0, 14)
-    hpLabel.Position = UDim2.new(0, 0, 0, 32)
+    hpLabel.Size = UDim2.new(1, 0, 0, 16)
+    hpLabel.Position = UDim2.new(0, 0, 0, 18)
     hpLabel.BackgroundTransparency = 1
-    hpLabel.TextColor3 = Color3.new(1, 1, 1)
+    hpLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
     hpLabel.TextStrokeTransparency = 0
     hpLabel.TextScaled = true
     hpLabel.Font = Enum.Font.Gotham
-    hpLabel.Text = string.format("%d/%d", math.floor(hum.Health), math.floor(hum.MaxHealth))
+    hpLabel.Text = string.format("HP: %d/%d", math.floor(hum.Health), math.floor(hum.MaxHealth))
     hpLabel.Parent = billboard
 
     local conn = RunService.Heartbeat:Connect(function()
         if not root.Parent or not hum.Parent then return end
 
-        local hpAlpha = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
-        hpBarFill.Size = UDim2.new(hpAlpha, 0, 1, 0)
-        hpBarFill.BackgroundColor3 = Color3.fromRGB(255 * (1 - hpAlpha), 255 * hpAlpha, 0)
-        hpLabel.Text = string.format("%d/%d", math.floor(hum.Health), math.floor(hum.MaxHealth))
+        hpLabel.Text = string.format("HP: %d/%d", math.floor(hum.Health), math.floor(hum.MaxHealth))
 
         local myChar = LocalPlayer.Character
         if myChar and myChar:FindFirstChild("HumanoidRootPart") then
@@ -366,7 +411,7 @@ task.spawn(function()
         if playerEspEnabled then
             refreshAllPlayerESP()
         end
-        task.wait(2)
+        task.wait(1)
     end
 end)
 
@@ -382,30 +427,31 @@ local function togglePlayerESP()
 end
 
 ----------------------------------------------------------------
--- ESP: MONSTERS (nametag + HP) (workspace.Monsters)
+-- ESP: FIGHTABLE NPCS (workspace.FightableNPCS)
 ----------------------------------------------------------------
-local monsterEspEnabled = true
-local MONSTER_COLOR = Color3.fromRGB(255, 0, 0)
-local monsterObjects = {}
+local npcEspEnabled = true
+local NPC_COLOR = Color3.fromRGB(255, 60, 60)
+local npcObjects = {}
 
-local function removeMonsterESP(inst)
-    local data = monsterObjects[inst]
+local function removeNpcESP(inst)
+    local data = npcObjects[inst]
     if data then
         if data.highlight then data.highlight:Destroy() end
         if data.billboard then data.billboard:Destroy() end
         if data.conn then data.conn:Disconnect() end
-        monsterObjects[inst] = nil
+        npcObjects[inst] = nil
     end
 end
 
-local function applyMonsterESP(inst)
-    if monsterObjects[inst] then return end
+local function applyNpcESP(inst)
+    if npcObjects[inst] then return end
+    if not inst:IsA("Model") then return end
 
     local hum = inst:FindFirstChildOfClass("Humanoid")
     local root = inst:FindFirstChild("HumanoidRootPart") or inst:FindFirstChild("Torso")
 
     local highlight = Instance.new("Highlight")
-    highlight.FillColor = MONSTER_COLOR
+    highlight.FillColor = NPC_COLOR
     highlight.OutlineColor = Color3.new(1, 1, 1)
     highlight.FillTransparency = 0.5
     highlight.OutlineTransparency = 0
@@ -415,59 +461,42 @@ local function applyMonsterESP(inst)
 
     if root then
         billboard = Instance.new("BillboardGui")
-        billboard.Size = UDim2.new(0, 180, 0, hum and 50 or 30)
+        billboard.Size = UDim2.new(0, 180, 0, hum and 34 or 18)
         billboard.StudsOffset = Vector3.new(0, 3, 0)
         billboard.AlwaysOnTop = true
         billboard.Adornee = root
         billboard.Parent = root
 
         local nameLabel = Instance.new("TextLabel")
-        nameLabel.Size = UDim2.new(1, 0, 0, 20)
+        nameLabel.Size = UDim2.new(1, 0, 0, 18)
         nameLabel.Position = UDim2.new(0, 0, 0, 0)
         nameLabel.BackgroundTransparency = 1
-        nameLabel.TextColor3 = MONSTER_COLOR
+        nameLabel.TextColor3 = NPC_COLOR
         nameLabel.TextStrokeTransparency = 0
         nameLabel.TextScaled = true
         nameLabel.Font = Enum.Font.GothamBold
         nameLabel.Text = inst.Name
         nameLabel.Parent = billboard
 
-        local hpBarFill, hpLabel
-
+        local hpLabel
         if hum then
-            local hpBarBg = Instance.new("Frame")
-            hpBarBg.Size = UDim2.new(1, 0, 0, 8)
-            hpBarBg.Position = UDim2.new(0, 0, 0, 22)
-            hpBarBg.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-            hpBarBg.BorderSizePixel = 0
-            hpBarBg.Parent = billboard
-
-            hpBarFill = Instance.new("Frame")
-            hpBarFill.Size = UDim2.new(1, 0, 1, 0)
-            hpBarFill.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
-            hpBarFill.BorderSizePixel = 0
-            hpBarFill.Parent = hpBarBg
-
             hpLabel = Instance.new("TextLabel")
-            hpLabel.Size = UDim2.new(1, 0, 0, 14)
-            hpLabel.Position = UDim2.new(0, 0, 0, 32)
+            hpLabel.Size = UDim2.new(1, 0, 0, 16)
+            hpLabel.Position = UDim2.new(0, 0, 0, 18)
             hpLabel.BackgroundTransparency = 1
-            hpLabel.TextColor3 = Color3.new(1, 1, 1)
+            hpLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
             hpLabel.TextStrokeTransparency = 0
             hpLabel.TextScaled = true
             hpLabel.Font = Enum.Font.Gotham
-            hpLabel.Text = string.format("%d/%d", math.floor(hum.Health), math.floor(hum.MaxHealth))
+            hpLabel.Text = string.format("HP: %d/%d", math.floor(hum.Health), math.floor(hum.MaxHealth))
             hpLabel.Parent = billboard
         end
 
         conn = RunService.Heartbeat:Connect(function()
             if not root.Parent then return end
 
-            if hum and hpBarFill and hpLabel then
-                local hpAlpha = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
-                hpBarFill.Size = UDim2.new(hpAlpha, 0, 1, 0)
-                hpBarFill.BackgroundColor3 = Color3.fromRGB(255 * (1 - hpAlpha), 255 * hpAlpha, 0)
-                hpLabel.Text = string.format("%d/%d", math.floor(hum.Health), math.floor(hum.MaxHealth))
+            if hum and hpLabel then
+                hpLabel.Text = string.format("HP: %d/%d", math.floor(hum.Health), math.floor(hum.MaxHealth))
             end
 
             local char = LocalPlayer.Character
@@ -478,55 +507,858 @@ local function applyMonsterESP(inst)
         end)
     end
 
-    monsterObjects[inst] = { highlight = highlight, billboard = billboard, conn = conn }
+    npcObjects[inst] = { highlight = highlight, billboard = billboard, conn = conn }
 end
 
-local function scanMonsters()
-    local folder = workspace:FindFirstChild("Monsters")
+local function scanFightableNPCs()
+    local folder = workspace:FindFirstChild("FightableNPCS")
     if not folder then return end
-    if monsterEspEnabled then
+    if npcEspEnabled then
         for _, child in ipairs(folder:GetChildren()) do
-            if child:IsA("Model") then
-                applyMonsterESP(child)
-            end
+            applyNpcESP(child)
         end
     end
 end
 
-local monstersFolder = workspace:FindFirstChild("Monsters")
-if monstersFolder then
-    monstersFolder.ChildAdded:Connect(function(child)
-        if monsterEspEnabled and child:IsA("Model") then
+local npcFolder = workspace:FindFirstChild("FightableNPCS")
+if npcFolder then
+    npcFolder.ChildAdded:Connect(function(child)
+        if npcEspEnabled then
             task.wait(0.1)
-            applyMonsterESP(child)
+            applyNpcESP(child)
         end
     end)
-    monstersFolder.ChildRemoved:Connect(function(child)
-        removeMonsterESP(child)
+    npcFolder.ChildRemoved:Connect(function(child)
+        removeNpcESP(child)
     end)
 end
 
 task.spawn(function()
-    task.wait(1)
-    scanMonsters()
+    while true do
+        scanFightableNPCs()
+        task.wait(1)
+    end
 end)
 
-local function toggleMonsterESP()
-    monsterEspEnabled = not monsterEspEnabled
-    if monsterEspEnabled then
-        scanMonsters()
+local function toggleNpcESP()
+    npcEspEnabled = not npcEspEnabled
+    if npcEspEnabled then
+        scanFightableNPCs()
     else
-        for inst, _ in pairs(monsterObjects) do
-            removeMonsterESP(inst)
+        for inst, _ in pairs(npcObjects) do
+            removeNpcESP(inst)
         end
     end
 end
+
+----------------------------------------------------------------
+-- ESP: NPCS (workspace.NPCS)
+----------------------------------------------------------------
+local npcsEspEnabled = true
+local NPCS_COLOR = Color3.fromRGB(0, 200, 255)
+local npcsObjects = {}
+
+local function removeNpcsESP(inst)
+    local data = npcsObjects[inst]
+    if data then
+        if data.highlight then data.highlight:Destroy() end
+        if data.billboard then data.billboard:Destroy() end
+        if data.conn then data.conn:Disconnect() end
+        npcsObjects[inst] = nil
+    end
+end
+
+local function applyNpcsESP(inst)
+    if npcsObjects[inst] then return end
+    if not inst:IsA("Model") then return end
+
+    local hum = inst:FindFirstChildOfClass("Humanoid")
+    local root = inst:FindFirstChild("HumanoidRootPart") or inst:FindFirstChild("Torso")
+
+    local highlight = Instance.new("Highlight")
+    highlight.FillColor = NPCS_COLOR
+    highlight.OutlineColor = Color3.new(1, 1, 1)
+    highlight.FillTransparency = 0.5
+    highlight.OutlineTransparency = 0
+    highlight.Parent = inst
+
+    local billboard, conn
+
+    if root then
+        billboard = Instance.new("BillboardGui")
+        billboard.Size = UDim2.new(0, 180, 0, hum and 34 or 18)
+        billboard.StudsOffset = Vector3.new(0, 3, 0)
+        billboard.AlwaysOnTop = true
+        billboard.Adornee = root
+        billboard.Parent = root
+
+        local nameLabel = Instance.new("TextLabel")
+        nameLabel.Size = UDim2.new(1, 0, 0, 18)
+        nameLabel.Position = UDim2.new(0, 0, 0, 0)
+        nameLabel.BackgroundTransparency = 1
+        nameLabel.TextColor3 = NPCS_COLOR
+        nameLabel.TextStrokeTransparency = 0
+        nameLabel.TextScaled = true
+        nameLabel.Font = Enum.Font.GothamBold
+        nameLabel.Text = inst.Name
+        nameLabel.Parent = billboard
+
+        local hpLabel
+        if hum then
+            hpLabel = Instance.new("TextLabel")
+            hpLabel.Size = UDim2.new(1, 0, 0, 16)
+            hpLabel.Position = UDim2.new(0, 0, 0, 18)
+            hpLabel.BackgroundTransparency = 1
+            hpLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+            hpLabel.TextStrokeTransparency = 0
+            hpLabel.TextScaled = true
+            hpLabel.Font = Enum.Font.Gotham
+            hpLabel.Text = string.format("HP: %d/%d", math.floor(hum.Health), math.floor(hum.MaxHealth))
+            hpLabel.Parent = billboard
+        end
+
+        conn = RunService.Heartbeat:Connect(function()
+            if not root.Parent then return end
+
+            if hum and hpLabel then
+                hpLabel.Text = string.format("HP: %d/%d", math.floor(hum.Health), math.floor(hum.MaxHealth))
+            end
+
+            local char = LocalPlayer.Character
+            if char and char:FindFirstChild("HumanoidRootPart") then
+                local dist = (char.HumanoidRootPart.Position - root.Position).Magnitude
+                nameLabel.Text = string.format("%s [%dm]", inst.Name, math.floor(dist))
+            end
+        end)
+    end
+
+    npcsObjects[inst] = { highlight = highlight, billboard = billboard, conn = conn }
+end
+
+local function scanNPCS()
+    local folder = workspace:FindFirstChild("NPCS")
+    if not folder then return end
+    if npcsEspEnabled then
+        for _, child in ipairs(folder:GetChildren()) do
+            applyNpcsESP(child)
+        end
+    end
+end
+
+local npcsFolder = workspace:FindFirstChild("NPCS")
+if npcsFolder then
+    npcsFolder.ChildAdded:Connect(function(child)
+        if npcsEspEnabled then
+            task.wait(0.1)
+            applyNpcsESP(child)
+        end
+    end)
+    npcsFolder.ChildRemoved:Connect(function(child)
+        removeNpcsESP(child)
+    end)
+end
+
+task.spawn(function()
+    while true do
+        scanNPCS()
+        task.wait(1)
+    end
+end)
+
+local function toggleNpcsESP()
+    npcsEspEnabled = not npcsEspEnabled
+    if npcsEspEnabled then
+        scanNPCS()
+    else
+        for inst, _ in pairs(npcsObjects) do
+            removeNpcsESP(inst)
+        end
+    end
+end
+
+----------------------------------------------------------------
+-- ESP: CLOSED CHEST (workspace.Objects.Closed_Chest) - MULTI INSTANCE
+----------------------------------------------------------------
+local chestEspEnabled = true
+local CHEST_COLOR = Color3.fromRGB(255, 215, 0)
+local chestObjects = {}
+
+local function removeChestESP(inst)
+    local data = chestObjects[inst]
+    if data then
+        if data.highlight then data.highlight:Destroy() end
+        if data.billboard then data.billboard:Destroy() end
+        if data.conn then data.conn:Disconnect() end
+        chestObjects[inst] = nil
+    end
+end
+
+local function applyChestESP(inst)
+    if chestObjects[inst] then return end
+
+    local part = inst:IsA("BasePart") and inst or inst:FindFirstChildWhichIsA("BasePart")
+    if not part then return end
+
+    local highlight = Instance.new("Highlight")
+    highlight.FillColor = CHEST_COLOR
+    highlight.OutlineColor = Color3.new(1, 1, 1)
+    highlight.FillTransparency = 0.3
+    highlight.OutlineTransparency = 0
+    highlight.Parent = inst
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Size = UDim2.new(0, 170, 0, 34)
+    billboard.StudsOffset = Vector3.new(0, 2, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Adornee = part
+    billboard.Parent = part
+
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Size = UDim2.new(1, 0, 0, 18)
+    nameLabel.Position = UDim2.new(0, 0, 0, 0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.TextColor3 = CHEST_COLOR
+    nameLabel.TextStrokeTransparency = 0
+    nameLabel.TextScaled = true
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.Text = "Closed Chest"
+    nameLabel.Parent = billboard
+
+    local distLabel = Instance.new("TextLabel")
+    distLabel.Size = UDim2.new(1, 0, 0, 16)
+    distLabel.Position = UDim2.new(0, 0, 0, 18)
+    distLabel.BackgroundTransparency = 1
+    distLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    distLabel.TextStrokeTransparency = 0
+    distLabel.TextScaled = true
+    distLabel.Font = Enum.Font.Gotham
+    distLabel.Text = "0m"
+    distLabel.Parent = billboard
+
+    local conn = RunService.Heartbeat:Connect(function()
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("HumanoidRootPart") and part.Parent then
+            local dist = (char.HumanoidRootPart.Position - part.Position).Magnitude
+            distLabel.Text = string.format("%dm", math.floor(dist))
+        end
+    end)
+
+    chestObjects[inst] = { highlight = highlight, billboard = billboard, conn = conn }
+end
+
+local function scanClosedChest()
+    local objectsFolder = workspace:FindFirstChild("Objects")
+    if not objectsFolder then return end
+    if not chestEspEnabled then return end
+
+    for _, child in ipairs(objectsFolder:GetChildren()) do
+        if child.Name == "Closed_Chest" then
+            applyChestESP(child)
+        end
+    end
+end
+
+local objectsFolderRef = workspace:FindFirstChild("Objects")
+if objectsFolderRef then
+    objectsFolderRef.ChildAdded:Connect(function(child)
+        if chestEspEnabled and child.Name == "Closed_Chest" then
+            task.wait(0.1)
+            applyChestESP(child)
+        end
+    end)
+    objectsFolderRef.ChildRemoved:Connect(function(child)
+        if child.Name == "Closed_Chest" then
+            removeChestESP(child)
+        end
+    end)
+end
+
+task.spawn(function()
+    while true do
+        if chestEspEnabled then
+            scanClosedChest()
+            for inst, _ in pairs(chestObjects) do
+                if not inst:IsDescendantOf(workspace) then
+                    removeChestESP(inst)
+                end
+            end
+        end
+        task.wait(1)
+    end
+end)
+
+local function toggleChestESP()
+    chestEspEnabled = not chestEspEnabled
+    if chestEspEnabled then
+        scanClosedChest()
+    else
+        for inst, _ in pairs(chestObjects) do
+            removeChestESP(inst)
+        end
+    end
+end
+
+----------------------------------------------------------------
+-- ESP: ORES (workspace.Map.Harvestable.Ores) - MULTI INSTANCE
+----------------------------------------------------------------
+local oreEspEnabled = true
+local ORE_COLOR = Color3.fromRGB(150, 220, 255)
+local oreObjects = {}
+
+local function getOresFolder()
+    local mapFolder = workspace:FindFirstChild("Map")
+    local harvestableFolder = mapFolder and mapFolder:FindFirstChild("Harvestable")
+    local oresFolder = harvestableFolder and harvestableFolder:FindFirstChild("Ores")
+    return oresFolder
+end
+
+local function removeOreESP(inst)
+    local data = oreObjects[inst]
+    if data then
+        if data.highlight then data.highlight:Destroy() end
+        if data.billboard then data.billboard:Destroy() end
+        if data.conn then data.conn:Disconnect() end
+        oreObjects[inst] = nil
+    end
+end
+
+local function applyOreESP(inst)
+    if oreObjects[inst] then return end
+
+    local part = inst:IsA("BasePart") and inst or inst:FindFirstChildWhichIsA("BasePart")
+    if not part then return end
+
+    local highlight = Instance.new("Highlight")
+    highlight.FillColor = ORE_COLOR
+    highlight.OutlineColor = Color3.new(1, 1, 1)
+    highlight.FillTransparency = 0.3
+    highlight.OutlineTransparency = 0
+    highlight.Parent = inst
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Size = UDim2.new(0, 160, 0, 34)
+    billboard.StudsOffset = Vector3.new(0, 2, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Adornee = part
+    billboard.Parent = part
+
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Size = UDim2.new(1, 0, 0, 18)
+    nameLabel.Position = UDim2.new(0, 0, 0, 0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.TextColor3 = ORE_COLOR
+    nameLabel.TextStrokeTransparency = 0
+    nameLabel.TextScaled = true
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.Text = inst.Name
+    nameLabel.Parent = billboard
+
+    local distLabel = Instance.new("TextLabel")
+    distLabel.Size = UDim2.new(1, 0, 0, 16)
+    distLabel.Position = UDim2.new(0, 0, 0, 18)
+    distLabel.BackgroundTransparency = 1
+    distLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    distLabel.TextStrokeTransparency = 0
+    distLabel.TextScaled = true
+    distLabel.Font = Enum.Font.Gotham
+    distLabel.Text = "0m"
+    distLabel.Parent = billboard
+
+    local conn = RunService.Heartbeat:Connect(function()
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("HumanoidRootPart") and part.Parent then
+            local dist = (char.HumanoidRootPart.Position - part.Position).Magnitude
+            distLabel.Text = string.format("%dm", math.floor(dist))
+        end
+    end)
+
+    oreObjects[inst] = { highlight = highlight, billboard = billboard, conn = conn }
+end
+
+local function scanOres()
+    local oresFolder = getOresFolder()
+    if not oresFolder then return end
+    if not oreEspEnabled then return end
+
+    for _, child in ipairs(oresFolder:GetChildren()) do
+        applyOreESP(child)
+    end
+end
+
+task.spawn(function()
+    local oresFolder = getOresFolder()
+    local attempts = 0
+    while not oresFolder and attempts < 20 do
+        task.wait(0.5)
+        oresFolder = getOresFolder()
+        attempts += 1
+    end
+
+    if oresFolder then
+        oresFolder.ChildAdded:Connect(function(child)
+            if oreEspEnabled then
+                task.wait(0.1)
+                applyOreESP(child)
+            end
+        end)
+        oresFolder.ChildRemoved:Connect(function(child)
+            removeOreESP(child)
+        end)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if oreEspEnabled then
+            scanOres()
+            for inst, _ in pairs(oreObjects) do
+                if not inst:IsDescendantOf(workspace) then
+                    removeOreESP(inst)
+                end
+            end
+        end
+        task.wait(1)
+    end
+end)
+
+local function toggleOreESP()
+    oreEspEnabled = not oreEspEnabled
+    if oreEspEnabled then
+        scanOres()
+    else
+        for inst, _ in pairs(oreObjects) do
+            removeOreESP(inst)
+        end
+    end
+end
+
+----------------------------------------------------------------
+-- ESP: CROPS (workspace.Map.Harvestable.Crops) - MULTI INSTANCE
+----------------------------------------------------------------
+local cropEspEnabled = true
+local CROP_COLOR = Color3.fromRGB(120, 255, 120)
+local cropObjects = {}
+
+local function getCropsFolder()
+    local mapFolder = workspace:FindFirstChild("Map")
+    local harvestableFolder = mapFolder and mapFolder:FindFirstChild("Harvestable")
+    local cropsFolder = harvestableFolder and harvestableFolder:FindFirstChild("Crops")
+    return cropsFolder
+end
+
+local function removeCropESP(inst)
+    local data = cropObjects[inst]
+    if data then
+        if data.highlight then data.highlight:Destroy() end
+        if data.billboard then data.billboard:Destroy() end
+        if data.conn then data.conn:Disconnect() end
+        cropObjects[inst] = nil
+    end
+end
+
+local function applyCropESP(inst)
+    if cropObjects[inst] then return end
+
+    local part = inst:IsA("BasePart") and inst or inst:FindFirstChildWhichIsA("BasePart")
+    if not part then return end
+
+    local highlight = Instance.new("Highlight")
+    highlight.FillColor = CROP_COLOR
+    highlight.OutlineColor = Color3.new(1, 1, 1)
+    highlight.FillTransparency = 0.3
+    highlight.OutlineTransparency = 0
+    highlight.Parent = inst
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Size = UDim2.new(0, 160, 0, 34)
+    billboard.StudsOffset = Vector3.new(0, 2, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Adornee = part
+    billboard.Parent = part
+
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Size = UDim2.new(1, 0, 0, 18)
+    nameLabel.Position = UDim2.new(0, 0, 0, 0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.TextColor3 = CROP_COLOR
+    nameLabel.TextStrokeTransparency = 0
+    nameLabel.TextScaled = true
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.Text = inst.Name
+    nameLabel.Parent = billboard
+
+    local distLabel = Instance.new("TextLabel")
+    distLabel.Size = UDim2.new(1, 0, 0, 16)
+    distLabel.Position = UDim2.new(0, 0, 0, 18)
+    distLabel.BackgroundTransparency = 1
+    distLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    distLabel.TextStrokeTransparency = 0
+    distLabel.TextScaled = true
+    distLabel.Font = Enum.Font.Gotham
+    distLabel.Text = "0m"
+    distLabel.Parent = billboard
+
+    local conn = RunService.Heartbeat:Connect(function()
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("HumanoidRootPart") and part.Parent then
+            local dist = (char.HumanoidRootPart.Position - part.Position).Magnitude
+            distLabel.Text = string.format("%dm", math.floor(dist))
+        end
+    end)
+
+    cropObjects[inst] = { highlight = highlight, billboard = billboard, conn = conn }
+end
+
+local function scanCrops()
+    local cropsFolder = getCropsFolder()
+    if not cropsFolder then return end
+    if not cropEspEnabled then return end
+
+    for _, child in ipairs(cropsFolder:GetChildren()) do
+        applyCropESP(child)
+    end
+end
+
+task.spawn(function()
+    local cropsFolder = getCropsFolder()
+    local attempts = 0
+    while not cropsFolder and attempts < 20 do
+        task.wait(0.5)
+        cropsFolder = getCropsFolder()
+        attempts += 1
+    end
+
+    if cropsFolder then
+        cropsFolder.ChildAdded:Connect(function(child)
+            if cropEspEnabled then
+                task.wait(0.1)
+                applyCropESP(child)
+            end
+        end)
+        cropsFolder.ChildRemoved:Connect(function(child)
+            removeCropESP(child)
+        end)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if cropEspEnabled then
+            scanCrops()
+            for inst, _ in pairs(cropObjects) do
+                if not inst:IsDescendantOf(workspace) then
+                    removeCropESP(inst)
+                end
+            end
+        end
+        task.wait(1)
+    end
+end)
+
+local function toggleCropESP()
+    cropEspEnabled = not cropEspEnabled
+    if cropEspEnabled then
+        scanCrops()
+    else
+        for inst, _ in pairs(cropObjects) do
+            removeCropESP(inst)
+        end
+    end
+end
+
+----------------------------------------------------------------
+-- FARM MOB (TP Above/Behind/Bottom via slider offsets, auto search & refresh, range 70 studs, anti-aerial)
+----------------------------------------------------------------
+local farmEnabled = false
+local farmMode = "Above"
+local farmOffsetX, farmOffsetY, farmOffsetZ = 0, 5, 5
+local farmKeybind = Enum.KeyCode.F4
+local capturingFarmKeybind = false
+local FARM_DETECT_RANGE = 70
+
+local currentFarmTarget = nil
+
+local function isValidFarmTarget(model)
+    if not model or not model.Parent then return false end
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    local root = model:FindFirstChild("HumanoidRootPart")
+    if not hum or hum.Health <= 0 or not root then return false end
+    local dist = (root.Position - rootPart.Position).Magnitude
+    return dist <= FARM_DETECT_RANGE
+end
+
+local function getNearestFightableNPC()
+    local folder = workspace:FindFirstChild("FightableNPCS")
+    if not folder then return nil end
+
+    local nearest, nearestDist = nil, math.huge
+    for _, model in ipairs(folder:GetChildren()) do
+        local hum = model:FindFirstChildOfClass("Humanoid")
+        local root = model:FindFirstChild("HumanoidRootPart")
+        if hum and hum.Health > 0 and root then
+            local dist = (root.Position - rootPart.Position).Magnitude
+            if dist <= FARM_DETECT_RANGE and dist < nearestDist then
+                nearestDist = dist
+                nearest = model
+            end
+        end
+    end
+    return nearest
+end
+
+local MIN_BEHIND_DISTANCE = 3
+
+local function computeFarmCFrame(targetRoot)
+    local targetCFrame = targetRoot.CFrame
+    local offsetPos
+
+    if farmMode == "Above" then
+        offsetPos = targetCFrame.Position + Vector3.new(farmOffsetX, math.abs(farmOffsetY), farmOffsetZ)
+    elseif farmMode == "Bottom" then
+        offsetPos = targetCFrame.Position + Vector3.new(farmOffsetX, -math.abs(farmOffsetY), farmOffsetZ)
+    elseif farmMode == "Behind" then
+        local behindDist = math.max(math.abs(farmOffsetZ), MIN_BEHIND_DISTANCE)
+        local backOffset = targetCFrame.LookVector * -behindDist
+        offsetPos = targetCFrame.Position + backOffset + Vector3.new(farmOffsetX, farmOffsetY, 0)
+    else
+        offsetPos = targetCFrame.Position + Vector3.new(farmOffsetX, farmOffsetY, farmOffsetZ)
+    end
+
+    return CFrame.new(offsetPos, targetCFrame.Position)
+end
+
+RunService.Heartbeat:Connect(function()
+    if not farmEnabled then return end
+    if not character or not character.Parent then return end
+    if flyEnabled then return end
+
+    if not isValidFarmTarget(currentFarmTarget) then
+        currentFarmTarget = getNearestFightableNPC()
+    end
+
+    if currentFarmTarget then
+        local targetRoot = currentFarmTarget:FindFirstChild("HumanoidRootPart")
+        if targetRoot and rootPart then
+            rootPart.CFrame = computeFarmCFrame(targetRoot)
+        end
+    end
+
+    if humanoid:GetState() == Enum.HumanoidStateType.Freefall then
+        humanoid:ChangeState(Enum.HumanoidStateType.Running)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if farmEnabled and isValidFarmTarget(currentFarmTarget) then
+            local betterTarget = getNearestFightableNPC()
+            if betterTarget and betterTarget ~= currentFarmTarget then
+                local currentDist = (currentFarmTarget.HumanoidRootPart.Position - rootPart.Position).Magnitude
+                local betterDist = (betterTarget.HumanoidRootPart.Position - rootPart.Position).Magnitude
+                if betterDist < currentDist - 5 then
+                    currentFarmTarget = betterTarget
+                end
+            end
+        end
+        task.wait(1)
+    end
+end)
+
+local function toggleFarm()
+    farmEnabled = not farmEnabled
+    if farmEnabled then
+        currentFarmTarget = nil
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.Freefall, false)
+        humanoid:ChangeState(Enum.HumanoidStateType.Running)
+    else
+        currentFarmTarget = nil
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.Freefall, true)
+    end
+end
+
+----------------------------------------------------------------
+-- CHARACTER RESPAWN HANDLING
+----------------------------------------------------------------
+LocalPlayer.CharacterAdded:Connect(function(newChar)
+    character = newChar
+    humanoid = newChar:WaitForChild("Humanoid")
+    rootPart = newChar:WaitForChild("HumanoidRootPart")
+
+    flyEnabled = false
+    noclipEnabled = false
+    farmEnabled = false
+    currentFarmTarget = nil
+
+    applyWalkSpeed()
+    watchWalkSpeed(humanoid)
+
+    if farmEnabled then
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.Freefall, false)
+    end
+end)
+
+----------------------------------------------------------------
+-- GUI refs
+----------------------------------------------------------------
+local wsKeybindBtn, noclipKeybindBtn, flyKeybindBtn, farmKeybindBtn
+local wsToggleBtnRef, noclipToggleBtnRef, flyToggleBtnRef, visualToggleBtnRef, farmToggleBtnRef
+
+local function refreshWsToggleUI()
+    if wsToggleBtnRef then
+        if walkSpeedEnabled then
+            wsToggleBtnRef.Text = "WalkSpeed: ON"
+            wsToggleBtnRef.BackgroundColor3 = Color3.fromRGB(40, 160, 70)
+        else
+            wsToggleBtnRef.Text = "WalkSpeed: OFF"
+            wsToggleBtnRef.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+        end
+    end
+end
+
+local function refreshNoclipToggleUI()
+    if noclipToggleBtnRef then
+        if noclipEnabled then
+            noclipToggleBtnRef.Text = "Noclip: ON"
+            noclipToggleBtnRef.BackgroundColor3 = Color3.fromRGB(40, 160, 70)
+        else
+            noclipToggleBtnRef.Text = "Noclip: OFF"
+            noclipToggleBtnRef.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+        end
+    end
+end
+
+local function refreshFlyToggleUI()
+    if flyToggleBtnRef then
+        if flyEnabled then
+            flyToggleBtnRef.Text = "Fly: ON"
+            flyToggleBtnRef.BackgroundColor3 = Color3.fromRGB(40, 160, 70)
+        else
+            flyToggleBtnRef.Text = "Fly: OFF"
+            flyToggleBtnRef.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+        end
+    end
+end
+
+local function refreshVisualToggleUI()
+    if visualToggleBtnRef then
+        if visualEnabled then
+            visualToggleBtnRef.Text = "NoFog + FullBright: ON"
+            visualToggleBtnRef.BackgroundColor3 = Color3.fromRGB(40, 160, 70)
+        else
+            visualToggleBtnRef.Text = "NoFog + FullBright: OFF"
+            visualToggleBtnRef.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+        end
+    end
+end
+
+local function refreshFarmToggleUI()
+    if farmToggleBtnRef then
+        if farmEnabled then
+            farmToggleBtnRef.Text = "Farm Mob: ON"
+            farmToggleBtnRef.BackgroundColor3 = Color3.fromRGB(40, 160, 70)
+        else
+            farmToggleBtnRef.Text = "Farm Mob: OFF"
+            farmToggleBtnRef.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+        end
+    end
+end
+
+----------------------------------------------------------------
+-- INPUT HANDLING
+----------------------------------------------------------------
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if capturingWSKeybind then
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            walkspeedKeybind = input.KeyCode
+            if wsKeybindBtn then
+                wsKeybindBtn.Text = tostring(walkspeedKeybind.Name) .. " (Keybind WalkSpeed)"
+                wsKeybindBtn.BackgroundColor3 = Color3.fromRGB(70, 90, 160)
+            end
+            capturingWSKeybind = false
+        end
+        return
+    end
+
+    if capturingNoclipKeybind then
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            noclipKeybind = input.KeyCode
+            if noclipKeybindBtn then
+                noclipKeybindBtn.Text = tostring(noclipKeybind.Name) .. " (Keybind Noclip)"
+                noclipKeybindBtn.BackgroundColor3 = Color3.fromRGB(70, 90, 160)
+            end
+            capturingNoclipKeybind = false
+        end
+        return
+    end
+
+    if capturingFlyKeybind then
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            flyKeybind = input.KeyCode
+            if flyKeybindBtn then
+                flyKeybindBtn.Text = tostring(flyKeybind.Name) .. " (Keybind Fly)"
+                flyKeybindBtn.BackgroundColor3 = Color3.fromRGB(70, 90, 160)
+            end
+            capturingFlyKeybind = false
+        end
+        return
+    end
+
+    if capturingFarmKeybind then
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            farmKeybind = input.KeyCode
+            if farmKeybindBtn then
+                farmKeybindBtn.Text = tostring(farmKeybind.Name) .. " (Keybind Farm)"
+                farmKeybindBtn.BackgroundColor3 = Color3.fromRGB(70, 90, 160)
+            end
+            capturingFarmKeybind = false
+        end
+        return
+    end
+
+    if not gameProcessed then
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            if input.KeyCode == walkspeedKeybind then
+                toggleWalkSpeed()
+                refreshWsToggleUI()
+            elseif input.KeyCode == noclipKeybind then
+                toggleNoclip()
+                refreshNoclipToggleUI()
+            elseif input.KeyCode == flyKeybind then
+                toggleFly()
+                refreshFlyToggleUI()
+            elseif input.KeyCode == farmKeybind then
+                toggleFarm()
+                refreshFarmToggleUI()
+            end
+        end
+    end
+
+    if flyEnabled then
+        if input.KeyCode == Enum.KeyCode.W then keysHeld.W = true
+        elseif input.KeyCode == Enum.KeyCode.A then keysHeld.A = true
+        elseif input.KeyCode == Enum.KeyCode.S then keysHeld.S = true
+        elseif input.KeyCode == Enum.KeyCode.D then keysHeld.D = true
+        elseif input.KeyCode == Enum.KeyCode.Space then keysHeld.Up = true
+        elseif input.KeyCode == Enum.KeyCode.LeftControl or input.KeyCode == Enum.KeyCode.RightControl then keysHeld.Down = true
+        end
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.KeyCode == Enum.KeyCode.W then keysHeld.W = false
+    elseif input.KeyCode == Enum.KeyCode.A then keysHeld.A = false
+    elseif input.KeyCode == Enum.KeyCode.S then keysHeld.S = false
+    elseif input.KeyCode == Enum.KeyCode.D then keysHeld.D = false
+    elseif input.KeyCode == Enum.KeyCode.Space then keysHeld.Up = false
+    elseif input.KeyCode == Enum.KeyCode.LeftControl or input.KeyCode == Enum.KeyCode.RightControl then keysHeld.Down = false
+    end
+end)
 
 ----------------------------------------------------------------
 -- GUI
 ----------------------------------------------------------------
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "UniversalGUI"
+ScreenGui.Name = "GrandCloverGUI"
 ScreenGui.ResetOnSpawn = false
 pcall(function() ScreenGui.Parent = CoreGui end)
 if not ScreenGui.Parent then
@@ -534,7 +1366,7 @@ if not ScreenGui.Parent then
 end
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 260, 0, 440)
+MainFrame.Size = UDim2.new(0, 270, 0, 440)
 MainFrame.Position = UDim2.new(0, 20, 0, 100)
 MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
 MainFrame.BorderSizePixel = 0
@@ -559,10 +1391,10 @@ local TitleLabel = Instance.new("TextLabel")
 TitleLabel.Size = UDim2.new(1, -40, 1, 0)
 TitleLabel.Position = UDim2.new(0, 10, 0, 0)
 TitleLabel.BackgroundTransparency = 1
-TitleLabel.Text = "Universal"
+TitleLabel.Text = "Grand Clover Script"
 TitleLabel.TextColor3 = Color3.new(1, 1, 1)
 TitleLabel.Font = Enum.Font.GothamBold
-TitleLabel.TextSize = 16
+TitleLabel.TextSize = 14
 TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
 TitleLabel.Parent = TitleBar
 
@@ -584,10 +1416,9 @@ closeBtn.MouseButton1Click:Connect(function()
     MainFrame.Visible = not MainFrame.Visible
 end)
 
-local TABS = {"Move", "Visual", "ESP"}
+local TABS = {"Move", "Farm", "Visual", "ESP"}
 local tabButtons = {}
 local tabFrames = {}
-
 local tabBarWidth = 1 / #TABS
 
 for i, tabName in ipairs(TABS) do
@@ -598,7 +1429,7 @@ for i, tabName in ipairs(TABS) do
     btn.Text = tabName
     btn.TextColor3 = Color3.new(1, 1, 1)
     btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 12
+    btn.TextSize = 11
     btn.Parent = MainFrame
 
     local corner = Instance.new("UICorner")
@@ -632,11 +1463,18 @@ for _, tabName in ipairs(TABS) do
 end
 
 -- =========================================================
--- TAB: MOVE (WalkSpeed + Noclip)
+-- TAB: MOVE (WalkSpeed + Noclip + Fly)
 -- =========================================================
 local moveTab = tabFrames["Move"]
 
--- ===== WalkSpeed section =====
+local moveScroll = Instance.new("ScrollingFrame")
+moveScroll.Size = UDim2.new(1, 0, 1, 0)
+moveScroll.BackgroundTransparency = 1
+moveScroll.BorderSizePixel = 0
+moveScroll.ScrollBarThickness = 4
+moveScroll.CanvasSize = UDim2.new(0, 0, 0, 430)
+moveScroll.Parent = moveTab
+
 local wsToggleBtn = Instance.new("TextButton")
 wsToggleBtn.Size = UDim2.new(1, 0, 0, 30)
 wsToggleBtn.Position = UDim2.new(0, 0, 0, 0)
@@ -645,60 +1483,48 @@ wsToggleBtn.Text = "WalkSpeed: OFF"
 wsToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 wsToggleBtn.Font = Enum.Font.GothamBold
 wsToggleBtn.TextSize = 13
-wsToggleBtn.Parent = moveTab
+wsToggleBtn.Parent = moveScroll
+wsToggleBtnRef = wsToggleBtn
 
 local wsToggleCorner = Instance.new("UICorner")
 wsToggleCorner.CornerRadius = UDim.new(0, 6)
 wsToggleCorner.Parent = wsToggleBtn
 
-local function refreshWsToggleUI()
-    if walkSpeedEnabled then
-        wsToggleBtn.Text = "WalkSpeed: ON"
-        wsToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 70)
-    else
-        wsToggleBtn.Text = "WalkSpeed: OFF"
-        wsToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
-    end
-end
-
-local function toggleWalkSpeed()
-    walkSpeedEnabled = not walkSpeedEnabled
-    applyWalkSpeed()
+wsToggleBtn.MouseButton1Click:Connect(function()
+    toggleWalkSpeed()
     refreshWsToggleUI()
-end
-
-wsToggleBtn.MouseButton1Click:Connect(toggleWalkSpeed)
+end)
 
 local speedValueLabel = Instance.new("TextLabel")
 speedValueLabel.Size = UDim2.new(1, 0, 0, 16)
-speedValueLabel.Position = UDim2.new(0, 0, 0, 40)
+speedValueLabel.Position = UDim2.new(0, 0, 0, 36)
 speedValueLabel.BackgroundTransparency = 1
 speedValueLabel.Text = "Speed Value: " .. WALK_SPEED_VALUE
 speedValueLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
 speedValueLabel.Font = Enum.Font.GothamBold
 speedValueLabel.TextSize = 12
 speedValueLabel.TextXAlignment = Enum.TextXAlignment.Left
-speedValueLabel.Parent = moveTab
+speedValueLabel.Parent = moveScroll
 
 local MIN_SPEED, MAX_SPEED = 10, 200
 
 local sliderTrack = Instance.new("Frame")
 sliderTrack.Size = UDim2.new(1, 0, 0, 8)
-sliderTrack.Position = UDim2.new(0, 0, 0, 60)
+sliderTrack.Position = UDim2.new(0, 0, 0, 56)
 sliderTrack.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
 sliderTrack.BorderSizePixel = 0
-sliderTrack.Parent = moveTab
+sliderTrack.Parent = moveScroll
 
 local trackCorner = Instance.new("UICorner")
 trackCorner.CornerRadius = UDim.new(1, 0)
 trackCorner.Parent = sliderTrack
 
-local function speedToAlpha(speed)
-    return math.clamp((speed - MIN_SPEED) / (MAX_SPEED - MIN_SPEED), 0, 1)
+local function speedToAlpha(speed, min, max)
+    return math.clamp((speed - min) / (max - min), 0, 1)
 end
 
 local sliderFill = Instance.new("Frame")
-sliderFill.Size = UDim2.new(speedToAlpha(WALK_SPEED_VALUE), 0, 1, 0)
+sliderFill.Size = UDim2.new(speedToAlpha(WALK_SPEED_VALUE, MIN_SPEED, MAX_SPEED), 0, 1, 0)
 sliderFill.BackgroundColor3 = Color3.fromRGB(70, 140, 220)
 sliderFill.BorderSizePixel = 0
 sliderFill.Parent = sliderTrack
@@ -710,7 +1536,7 @@ fillCorner.Parent = sliderFill
 local knob = Instance.new("Frame")
 knob.Size = UDim2.new(0, 16, 0, 16)
 knob.AnchorPoint = Vector2.new(0.5, 0.5)
-knob.Position = UDim2.new(speedToAlpha(WALK_SPEED_VALUE), 0, 0.5, 0)
+knob.Position = UDim2.new(speedToAlpha(WALK_SPEED_VALUE, MIN_SPEED, MAX_SPEED), 0, 0.5, 0)
 knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 knob.BorderSizePixel = 0
 knob.Parent = sliderTrack
@@ -721,7 +1547,7 @@ knobCorner.Parent = knob
 
 local speedInput = Instance.new("TextBox")
 speedInput.Size = UDim2.new(1, 0, 0, 28)
-speedInput.Position = UDim2.new(0, 0, 0, 78)
+speedInput.Position = UDim2.new(0, 0, 0, 74)
 speedInput.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
 speedInput.Text = tostring(WALK_SPEED_VALUE)
 speedInput.PlaceholderText = "Ketik angka speed..."
@@ -729,7 +1555,7 @@ speedInput.TextColor3 = Color3.new(1, 1, 1)
 speedInput.Font = Enum.Font.GothamBold
 speedInput.TextSize = 13
 speedInput.ClearTextOnFocus = false
-speedInput.Parent = moveTab
+speedInput.Parent = moveScroll
 
 local speedInputCorner = Instance.new("UICorner")
 speedInputCorner.CornerRadius = UDim.new(0, 6)
@@ -740,7 +1566,7 @@ local function setWalkSpeedValue(newValue)
     WALK_SPEED_VALUE = newValue
     speedValueLabel.Text = "Speed Value: " .. WALK_SPEED_VALUE
     speedInput.Text = tostring(WALK_SPEED_VALUE)
-    local alpha = speedToAlpha(WALK_SPEED_VALUE)
+    local alpha = speedToAlpha(WALK_SPEED_VALUE, MIN_SPEED, MAX_SPEED)
     sliderFill.Size = UDim2.new(alpha, 0, 1, 0)
     knob.Position = UDim2.new(alpha, 0, 0.5, 0)
     if walkSpeedEnabled then applyWalkSpeed() end
@@ -790,26 +1616,15 @@ speedInput.FocusLost:Connect(function()
     end
 end)
 
-local wsKeybindLabel = Instance.new("TextLabel")
-wsKeybindLabel.Size = UDim2.new(1, 0, 0, 14)
-wsKeybindLabel.Position = UDim2.new(0, 0, 0, 114)
-wsKeybindLabel.BackgroundTransparency = 1
-wsKeybindLabel.Text = "Keybind WalkSpeed:"
-wsKeybindLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
-wsKeybindLabel.Font = Enum.Font.GothamBold
-wsKeybindLabel.TextSize = 12
-wsKeybindLabel.TextXAlignment = Enum.TextXAlignment.Left
-wsKeybindLabel.Parent = moveTab
-
-local wsKeybindBtn = Instance.new("TextButton")
+wsKeybindBtn = Instance.new("TextButton")
 wsKeybindBtn.Size = UDim2.new(1, 0, 0, 26)
-wsKeybindBtn.Position = UDim2.new(0, 0, 0, 130)
+wsKeybindBtn.Position = UDim2.new(0, 0, 0, 110)
 wsKeybindBtn.BackgroundColor3 = Color3.fromRGB(70, 90, 160)
-wsKeybindBtn.Text = "F1"
+wsKeybindBtn.Text = "F1 (Keybind WalkSpeed)"
 wsKeybindBtn.TextColor3 = Color3.new(1, 1, 1)
 wsKeybindBtn.Font = Enum.Font.GothamBold
-wsKeybindBtn.TextSize = 13
-wsKeybindBtn.Parent = moveTab
+wsKeybindBtn.TextSize = 12
+wsKeybindBtn.Parent = moveScroll
 
 local wsKeybindBtnCorner = Instance.new("UICorner")
 wsKeybindBtnCorner.CornerRadius = UDim.new(0, 6)
@@ -822,64 +1637,42 @@ wsKeybindBtn.MouseButton1Click:Connect(function()
     wsKeybindBtn.BackgroundColor3 = Color3.fromRGB(160, 130, 40)
 end)
 
--- ===== Divider =====
-local moveDivider = Instance.new("Frame")
-moveDivider.Size = UDim2.new(1, 0, 0, 1)
-moveDivider.Position = UDim2.new(0, 0, 0, 164)
-moveDivider.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-moveDivider.BorderSizePixel = 0
-moveDivider.Parent = moveTab
+local moveDivider1 = Instance.new("Frame")
+moveDivider1.Size = UDim2.new(1, 0, 0, 1)
+moveDivider1.Position = UDim2.new(0, 0, 0, 146)
+moveDivider1.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+moveDivider1.BorderSizePixel = 0
+moveDivider1.Parent = moveScroll
 
--- ===== Noclip section =====
 local noclipToggleBtn = Instance.new("TextButton")
 noclipToggleBtn.Size = UDim2.new(1, 0, 0, 30)
-noclipToggleBtn.Position = UDim2.new(0, 0, 0, 172)
+noclipToggleBtn.Position = UDim2.new(0, 0, 0, 154)
 noclipToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
 noclipToggleBtn.Text = "Noclip: OFF"
 noclipToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 noclipToggleBtn.Font = Enum.Font.GothamBold
 noclipToggleBtn.TextSize = 13
-noclipToggleBtn.Parent = moveTab
+noclipToggleBtn.Parent = moveScroll
+noclipToggleBtnRef = noclipToggleBtn
 
 local noclipToggleCorner = Instance.new("UICorner")
 noclipToggleCorner.CornerRadius = UDim.new(0, 6)
 noclipToggleCorner.Parent = noclipToggleBtn
-
-local function refreshNoclipToggleUI()
-    if noclipEnabled then
-        noclipToggleBtn.Text = "Noclip: ON"
-        noclipToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 70)
-    else
-        noclipToggleBtn.Text = "Noclip: OFF"
-        noclipToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
-    end
-end
 
 noclipToggleBtn.MouseButton1Click:Connect(function()
     toggleNoclip()
     refreshNoclipToggleUI()
 end)
 
-local noclipKeybindLabel = Instance.new("TextLabel")
-noclipKeybindLabel.Size = UDim2.new(1, 0, 0, 14)
-noclipKeybindLabel.Position = UDim2.new(0, 0, 0, 210)
-noclipKeybindLabel.BackgroundTransparency = 1
-noclipKeybindLabel.Text = "Keybind Noclip:"
-noclipKeybindLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
-noclipKeybindLabel.Font = Enum.Font.GothamBold
-noclipKeybindLabel.TextSize = 12
-noclipKeybindLabel.TextXAlignment = Enum.TextXAlignment.Left
-noclipKeybindLabel.Parent = moveTab
-
-local noclipKeybindBtn = Instance.new("TextButton")
+noclipKeybindBtn = Instance.new("TextButton")
 noclipKeybindBtn.Size = UDim2.new(1, 0, 0, 26)
-noclipKeybindBtn.Position = UDim2.new(0, 0, 0, 226)
+noclipKeybindBtn.Position = UDim2.new(0, 0, 0, 190)
 noclipKeybindBtn.BackgroundColor3 = Color3.fromRGB(70, 90, 160)
-noclipKeybindBtn.Text = "F2"
+noclipKeybindBtn.Text = "F2 (Keybind Noclip)"
 noclipKeybindBtn.TextColor3 = Color3.new(1, 1, 1)
 noclipKeybindBtn.Font = Enum.Font.GothamBold
-noclipKeybindBtn.TextSize = 13
-noclipKeybindBtn.Parent = moveTab
+noclipKeybindBtn.TextSize = 12
+noclipKeybindBtn.Parent = moveScroll
 
 local noclipKeybindBtnCorner = Instance.new("UICorner")
 noclipKeybindBtnCorner.CornerRadius = UDim.new(0, 6)
@@ -892,8 +1685,368 @@ noclipKeybindBtn.MouseButton1Click:Connect(function()
     noclipKeybindBtn.BackgroundColor3 = Color3.fromRGB(160, 130, 40)
 end)
 
+local moveDivider2 = Instance.new("Frame")
+moveDivider2.Size = UDim2.new(1, 0, 0, 1)
+moveDivider2.Position = UDim2.new(0, 0, 0, 226)
+moveDivider2.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+moveDivider2.BorderSizePixel = 0
+moveDivider2.Parent = moveScroll
+
+local flyToggleBtn = Instance.new("TextButton")
+flyToggleBtn.Size = UDim2.new(1, 0, 0, 30)
+flyToggleBtn.Position = UDim2.new(0, 0, 0, 234)
+flyToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+flyToggleBtn.Text = "Fly: OFF"
+flyToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+flyToggleBtn.Font = Enum.Font.GothamBold
+flyToggleBtn.TextSize = 13
+flyToggleBtn.Parent = moveScroll
+flyToggleBtnRef = flyToggleBtn
+
+local flyToggleCorner = Instance.new("UICorner")
+flyToggleCorner.CornerRadius = UDim.new(0, 6)
+flyToggleCorner.Parent = flyToggleBtn
+
+flyToggleBtn.MouseButton1Click:Connect(function()
+    toggleFly()
+    refreshFlyToggleUI()
+end)
+
+local flySpeedValueLabel = Instance.new("TextLabel")
+flySpeedValueLabel.Size = UDim2.new(1, 0, 0, 16)
+flySpeedValueLabel.Position = UDim2.new(0, 0, 0, 270)
+flySpeedValueLabel.BackgroundTransparency = 1
+flySpeedValueLabel.Text = "Fly Speed: " .. FLY_SPEED_VALUE
+flySpeedValueLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
+flySpeedValueLabel.Font = Enum.Font.GothamBold
+flySpeedValueLabel.TextSize = 12
+flySpeedValueLabel.TextXAlignment = Enum.TextXAlignment.Left
+flySpeedValueLabel.Parent = moveScroll
+
+local FLY_MIN_SPEED, FLY_MAX_SPEED = 10, 300
+
+local flySliderTrack = Instance.new("Frame")
+flySliderTrack.Size = UDim2.new(1, 0, 0, 8)
+flySliderTrack.Position = UDim2.new(0, 0, 0, 290)
+flySliderTrack.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+flySliderTrack.BorderSizePixel = 0
+flySliderTrack.Parent = moveScroll
+
+local flyTrackCorner = Instance.new("UICorner")
+flyTrackCorner.CornerRadius = UDim.new(1, 0)
+flyTrackCorner.Parent = flySliderTrack
+
+local flySliderFill = Instance.new("Frame")
+flySliderFill.Size = UDim2.new(speedToAlpha(FLY_SPEED_VALUE, FLY_MIN_SPEED, FLY_MAX_SPEED), 0, 1, 0)
+flySliderFill.BackgroundColor3 = Color3.fromRGB(70, 140, 220)
+flySliderFill.BorderSizePixel = 0
+flySliderFill.Parent = flySliderTrack
+
+local flyFillCorner = Instance.new("UICorner")
+flyFillCorner.CornerRadius = UDim.new(1, 0)
+flyFillCorner.Parent = flySliderFill
+
+local flyKnob = Instance.new("Frame")
+flyKnob.Size = UDim2.new(0, 16, 0, 16)
+flyKnob.AnchorPoint = Vector2.new(0.5, 0.5)
+flyKnob.Position = UDim2.new(speedToAlpha(FLY_SPEED_VALUE, FLY_MIN_SPEED, FLY_MAX_SPEED), 0, 0.5, 0)
+flyKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+flyKnob.BorderSizePixel = 0
+flyKnob.Parent = flySliderTrack
+
+local flyKnobCorner = Instance.new("UICorner")
+flyKnobCorner.CornerRadius = UDim.new(1, 0)
+flyKnobCorner.Parent = flyKnob
+
+local flySpeedInput = Instance.new("TextBox")
+flySpeedInput.Size = UDim2.new(1, 0, 0, 28)
+flySpeedInput.Position = UDim2.new(0, 0, 0, 308)
+flySpeedInput.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+flySpeedInput.Text = tostring(FLY_SPEED_VALUE)
+flySpeedInput.PlaceholderText = "Ketik angka speed..."
+flySpeedInput.TextColor3 = Color3.new(1, 1, 1)
+flySpeedInput.Font = Enum.Font.GothamBold
+flySpeedInput.TextSize = 13
+flySpeedInput.ClearTextOnFocus = false
+flySpeedInput.Parent = moveScroll
+
+local flySpeedInputCorner = Instance.new("UICorner")
+flySpeedInputCorner.CornerRadius = UDim.new(0, 6)
+flySpeedInputCorner.Parent = flySpeedInput
+
+local function setFlySpeedValue(newValue)
+    newValue = math.clamp(math.floor(newValue + 0.5), FLY_MIN_SPEED, FLY_MAX_SPEED)
+    FLY_SPEED_VALUE = newValue
+    flySpeedValueLabel.Text = "Fly Speed: " .. FLY_SPEED_VALUE
+    flySpeedInput.Text = tostring(FLY_SPEED_VALUE)
+    local alpha = speedToAlpha(FLY_SPEED_VALUE, FLY_MIN_SPEED, FLY_MAX_SPEED)
+    flySliderFill.Size = UDim2.new(alpha, 0, 1, 0)
+    flyKnob.Position = UDim2.new(alpha, 0, 0.5, 0)
+end
+
+local draggingFlySlider = false
+
+local function updateFromFlySliderInput(inputX)
+    local trackAbsPos = flySliderTrack.AbsolutePosition.X
+    local trackAbsSize = flySliderTrack.AbsoluteSize.X
+    local alpha = math.clamp((inputX - trackAbsPos) / trackAbsSize, 0, 1)
+    local newSpeed = FLY_MIN_SPEED + alpha * (FLY_MAX_SPEED - FLY_MIN_SPEED)
+    setFlySpeedValue(newSpeed)
+end
+
+flyKnob.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        draggingFlySlider = true
+    end
+end)
+
+flySliderTrack.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        draggingFlySlider = true
+        updateFromFlySliderInput(input.Position.X)
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if draggingFlySlider and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        updateFromFlySliderInput(input.Position.X)
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        draggingFlySlider = false
+    end
+end)
+
+flySpeedInput.FocusLost:Connect(function()
+    local num = tonumber(flySpeedInput.Text)
+    if num then
+        setFlySpeedValue(num)
+    else
+        flySpeedInput.Text = tostring(FLY_SPEED_VALUE)
+    end
+end)
+
+flyKeybindBtn = Instance.new("TextButton")
+flyKeybindBtn.Size = UDim2.new(1, 0, 0, 26)
+flyKeybindBtn.Position = UDim2.new(0, 0, 0, 344)
+flyKeybindBtn.BackgroundColor3 = Color3.fromRGB(70, 90, 160)
+flyKeybindBtn.Text = "F3 (Keybind Fly)"
+flyKeybindBtn.TextColor3 = Color3.new(1, 1, 1)
+flyKeybindBtn.Font = Enum.Font.GothamBold
+flyKeybindBtn.TextSize = 12
+flyKeybindBtn.Parent = moveScroll
+
+local flyKeybindBtnCorner = Instance.new("UICorner")
+flyKeybindBtnCorner.CornerRadius = UDim.new(0, 6)
+flyKeybindBtnCorner.Parent = flyKeybindBtn
+
+flyKeybindBtn.MouseButton1Click:Connect(function()
+    if capturingFlyKeybind then return end
+    capturingFlyKeybind = true
+    flyKeybindBtn.Text = "Tekan tombol..."
+    flyKeybindBtn.BackgroundColor3 = Color3.fromRGB(160, 130, 40)
+end)
+
+local flyInfo = Instance.new("TextLabel")
+flyInfo.Size = UDim2.new(1, 0, 0, 50)
+flyInfo.Position = UDim2.new(0, 0, 0, 376)
+flyInfo.BackgroundTransparency = 1
+flyInfo.Text = "W/A/S/D = gerak | Space = naik | Ctrl = turun"
+flyInfo.TextColor3 = Color3.fromRGB(160, 160, 170)
+flyInfo.Font = Enum.Font.Gotham
+flyInfo.TextSize = 11
+flyInfo.TextWrapped = true
+flyInfo.TextXAlignment = Enum.TextXAlignment.Left
+flyInfo.TextYAlignment = Enum.TextYAlignment.Top
+flyInfo.Parent = moveScroll
+
 -- =========================================================
--- TAB: VISUAL (NoFog + FullBright)
+-- TAB: FARM MOB
+-- =========================================================
+local farmTab = tabFrames["Farm"]
+
+local farmToggleBtn = Instance.new("TextButton")
+farmToggleBtn.Size = UDim2.new(1, 0, 0, 30)
+farmToggleBtn.Position = UDim2.new(0, 0, 0, 0)
+farmToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+farmToggleBtn.Text = "Farm Mob: OFF"
+farmToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+farmToggleBtn.Font = Enum.Font.GothamBold
+farmToggleBtn.TextSize = 13
+farmToggleBtn.Parent = farmTab
+farmToggleBtnRef = farmToggleBtn
+
+local farmToggleCorner = Instance.new("UICorner")
+farmToggleCorner.CornerRadius = UDim.new(0, 6)
+farmToggleCorner.Parent = farmToggleBtn
+
+farmToggleBtn.MouseButton1Click:Connect(function()
+    toggleFarm()
+    refreshFarmToggleUI()
+end)
+
+local MODES = {"Above", "Behind", "Bottom"}
+local modeButtons = {}
+local modeBarWidth = 1 / #MODES
+
+for i, modeName in ipairs(MODES) do
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(modeBarWidth, -4, 0, 26)
+    btn.Position = UDim2.new((i - 1) * modeBarWidth, 2, 0, 40)
+    btn.BackgroundColor3 = (modeName == farmMode) and Color3.fromRGB(70, 90, 160) or Color3.fromRGB(55, 55, 55)
+    btn.Text = modeName
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 12
+    btn.Parent = farmTab
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = btn
+
+    modeButtons[modeName] = btn
+
+    btn.MouseButton1Click:Connect(function()
+        farmMode = modeName
+        for name, b in pairs(modeButtons) do
+            b.BackgroundColor3 = (name == farmMode) and Color3.fromRGB(70, 90, 160) or Color3.fromRGB(55, 55, 55)
+        end
+    end)
+end
+
+local FARM_MIN_XZ, FARM_MAX_XZ = -50, 50
+local FARM_MIN_Y, FARM_MAX_Y = 0, 50
+
+local function createFarmOffsetSlider(labelText, yPos, minVal, maxVal, initialValue, onChange)
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 0, 14)
+    label.Position = UDim2.new(0, 0, 0, yPos)
+    label.BackgroundTransparency = 1
+    label.Text = labelText .. ": " .. initialValue
+    label.TextColor3 = Color3.fromRGB(200, 200, 255)
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 12
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = farmTab
+
+    local track = Instance.new("Frame")
+    track.Size = UDim2.new(1, 0, 0, 8)
+    track.Position = UDim2.new(0, 0, 0, yPos + 18)
+    track.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    track.BorderSizePixel = 0
+    track.Parent = farmTab
+
+    local trackCorner = Instance.new("UICorner")
+    trackCorner.CornerRadius = UDim.new(1, 0)
+    trackCorner.Parent = track
+
+    local function toAlpha(v)
+        return math.clamp((v - minVal) / (maxVal - minVal), 0, 1)
+    end
+
+    local fill = Instance.new("Frame")
+    fill.Size = UDim2.new(toAlpha(initialValue), 0, 1, 0)
+    fill.BackgroundColor3 = Color3.fromRGB(70, 140, 220)
+    fill.BorderSizePixel = 0
+    fill.Parent = track
+
+    local fillCorner = Instance.new("UICorner")
+    fillCorner.CornerRadius = UDim.new(1, 0)
+    fillCorner.Parent = fill
+
+    local sknob = Instance.new("Frame")
+    sknob.Size = UDim2.new(0, 14, 0, 14)
+    sknob.AnchorPoint = Vector2.new(0.5, 0.5)
+    sknob.Position = UDim2.new(toAlpha(initialValue), 0, 0.5, 0)
+    sknob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    sknob.BorderSizePixel = 0
+    sknob.Parent = track
+
+    local sknobCorner = Instance.new("UICorner")
+    sknobCorner.CornerRadius = UDim.new(1, 0)
+    sknobCorner.Parent = sknob
+
+    local dragging = false
+
+    local function update(inputX)
+        local absPos = track.AbsolutePosition.X
+        local absSize = track.AbsoluteSize.X
+        local alpha = math.clamp((inputX - absPos) / absSize, 0, 1)
+        local val = math.floor(minVal + alpha * (maxVal - minVal) + 0.5)
+        fill.Size = UDim2.new(alpha, 0, 1, 0)
+        sknob.Position = UDim2.new(alpha, 0, 0.5, 0)
+        label.Text = labelText .. ": " .. val
+        onChange(val)
+    end
+
+    sknob.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+        end
+    end)
+
+    track.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            update(input.Position.X)
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            update(input.Position.X)
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+end
+
+createFarmOffsetSlider("X", 74, FARM_MIN_XZ, FARM_MAX_XZ, farmOffsetX, function(v) farmOffsetX = v end)
+createFarmOffsetSlider("Y", 116, FARM_MIN_Y, FARM_MAX_Y, farmOffsetY, function(v) farmOffsetY = v end)
+createFarmOffsetSlider("Z", 158, FARM_MIN_XZ, FARM_MAX_XZ, farmOffsetZ, function(v) farmOffsetZ = v end)
+
+farmKeybindBtn = Instance.new("TextButton")
+farmKeybindBtn.Size = UDim2.new(1, 0, 0, 26)
+farmKeybindBtn.Position = UDim2.new(0, 0, 0, 202)
+farmKeybindBtn.BackgroundColor3 = Color3.fromRGB(70, 90, 160)
+farmKeybindBtn.Text = "F4 (Keybind Farm)"
+farmKeybindBtn.TextColor3 = Color3.new(1, 1, 1)
+farmKeybindBtn.Font = Enum.Font.GothamBold
+farmKeybindBtn.TextSize = 12
+farmKeybindBtn.Parent = farmTab
+
+local farmKeybindBtnCorner = Instance.new("UICorner")
+farmKeybindBtnCorner.CornerRadius = UDim.new(0, 6)
+farmKeybindBtnCorner.Parent = farmKeybindBtn
+
+farmKeybindBtn.MouseButton1Click:Connect(function()
+    if capturingFarmKeybind then return end
+    capturingFarmKeybind = true
+    farmKeybindBtn.Text = "Tekan tombol..."
+    farmKeybindBtn.BackgroundColor3 = Color3.fromRGB(160, 130, 40)
+end)
+
+local farmInfo = Instance.new("TextLabel")
+farmInfo.Size = UDim2.new(1, 0, 0, 100)
+farmInfo.Position = UDim2.new(0, 0, 0, 234)
+farmInfo.BackgroundTransparency = 1
+farmInfo.Text = "Target: workspace.FightableNPCS, hanya dalam radius 70 stud\nAbove/Bottom: Y = jarak atas/bawah, X/Z geser samping\nBehind: Z = jarak di belakang target (min 3, biar gak nempel)\nAnti-aerial: Freefall di-disable selama farm ON"
+farmInfo.TextColor3 = Color3.fromRGB(160, 160, 170)
+farmInfo.Font = Enum.Font.Gotham
+farmInfo.TextSize = 11
+farmInfo.TextWrapped = true
+farmInfo.TextXAlignment = Enum.TextXAlignment.Left
+farmInfo.TextYAlignment = Enum.TextYAlignment.Top
+farmInfo.Parent = farmTab
+
+-- =========================================================
+-- TAB: VISUAL (NoFog + FullBright + NoAtmosphere)
 -- =========================================================
 local visualTab = tabFrames["Visual"]
 
@@ -906,28 +2059,22 @@ visualToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 visualToggleBtn.Font = Enum.Font.GothamBold
 visualToggleBtn.TextSize = 13
 visualToggleBtn.Parent = visualTab
+visualToggleBtnRef = visualToggleBtn
 
 local visualToggleCorner = Instance.new("UICorner")
 visualToggleCorner.CornerRadius = UDim.new(0, 6)
 visualToggleCorner.Parent = visualToggleBtn
 
 visualToggleBtn.MouseButton1Click:Connect(function()
-    visualEnabled = not visualEnabled
-    applyVisual()
-    if visualEnabled then
-        visualToggleBtn.Text = "NoFog + FullBright: ON"
-        visualToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 70)
-    else
-        visualToggleBtn.Text = "NoFog + FullBright: OFF"
-        visualToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
-    end
+    toggleVisual()
+    refreshVisualToggleUI()
 end)
 
 local visualInfo = Instance.new("TextLabel")
-visualInfo.Size = UDim2.new(1, 0, 0, 80)
+visualInfo.Size = UDim2.new(1, 0, 0, 90)
 visualInfo.Position = UDim2.new(0, 0, 0, 40)
 visualInfo.BackgroundTransparency = 1
-visualInfo.Text = "Menghilangkan fog & bikin scene terang terus (siang terus, ambient tinggi, no shadow).\nToggle OFF buat balikin ke pengaturan asli game."
+visualInfo.Text = "Menghilangkan fog, atmosphere/haze, dan bikin scene terang maksimal (siang terus, ambient putih penuh, no shadow).\nToggle OFF buat balikin ke pengaturan asli game."
 visualInfo.TextColor3 = Color3.fromRGB(160, 160, 170)
 visualInfo.Font = Enum.Font.Gotham
 visualInfo.TextSize = 11
@@ -937,9 +2084,17 @@ visualInfo.TextYAlignment = Enum.TextYAlignment.Top
 visualInfo.Parent = visualTab
 
 -- =========================================================
--- TAB: ESP (Trinket, Player, Monster)
+-- TAB: ESP (Player, FightableNPCS, NPCS, Closed_Chest, Ores, Crops)
 -- =========================================================
 local espTab = tabFrames["ESP"]
+
+local espScroll = Instance.new("ScrollingFrame")
+espScroll.Size = UDim2.new(1, 0, 1, 0)
+espScroll.BackgroundTransparency = 1
+espScroll.BorderSizePixel = 0
+espScroll.ScrollBarThickness = 4
+espScroll.CanvasSize = UDim2.new(0, 0, 0, 340)
+espScroll.Parent = espTab
 
 local function createEspToggleRow(yPos, label, isOnFn, toggleFn)
     local btn = Instance.new("TextButton")
@@ -950,7 +2105,7 @@ local function createEspToggleRow(yPos, label, isOnFn, toggleFn)
     btn.TextColor3 = Color3.new(1, 1, 1)
     btn.Font = Enum.Font.GothamBold
     btn.TextSize = 13
-    btn.Parent = espTab
+    btn.Parent = espScroll
 
     local corner = Instance.new("UICorner")
     corner.CornerRadius = UDim.new(0, 6)
@@ -966,58 +2121,25 @@ local function createEspToggleRow(yPos, label, isOnFn, toggleFn)
     return btn
 end
 
-createEspToggleRow(0, "Trinket ESP", function() return trinketEspEnabled end, toggleTrinketESP)
-createEspToggleRow(38, "Player ESP", function() return playerEspEnabled end, togglePlayerESP)
-createEspToggleRow(76, "Monster ESP", function() return monsterEspEnabled end, toggleMonsterESP)
+createEspToggleRow(0, "Player ESP", function() return playerEspEnabled end, togglePlayerESP)
+createEspToggleRow(38, "FightableNPCS ESP", function() return npcEspEnabled end, toggleNpcESP)
+createEspToggleRow(76, "NPCS ESP", function() return npcsEspEnabled end, toggleNpcsESP)
+createEspToggleRow(114, "Closed Chest ESP", function() return chestEspEnabled end, toggleChestESP)
+createEspToggleRow(152, "Ore ESP", function() return oreEspEnabled end, toggleOreESP)
+createEspToggleRow(190, "Crop ESP", function() return cropEspEnabled end, toggleCropESP)
 
 local espInfo = Instance.new("TextLabel")
-espInfo.Size = UDim2.new(1, 0, 0, 100)
-espInfo.Position = UDim2.new(0, 0, 0, 116)
+espInfo.Size = UDim2.new(1, 0, 0, 140)
+espInfo.Position = UDim2.new(0, 0, 0, 230)
 espInfo.BackgroundTransparency = 1
-espInfo.Text = "Trinket: workspace.TrinketSpawns (emas)\nPlayer: nametag + HP bar (hijau)\nMonster: workspace.Monsters, nametag + HP bar (merah)"
+espInfo.Text = "Player: nama+jarak+HP (hijau)\nFightableNPCS: workspace.FightableNPCS (merah)\nNPCS: workspace.NPCS (cyan)\nClosed Chest: workspace.Objects.Closed_Chest, multi-instance (emas)\nOre: workspace.Map.Harvestable.Ores, multi-instance (biru muda)\nCrop: workspace.Map.Harvestable.Crops, multi-instance (hijau muda)\nSemua refresh terus-menerus."
 espInfo.TextColor3 = Color3.fromRGB(160, 160, 170)
 espInfo.Font = Enum.Font.Gotham
 espInfo.TextSize = 11
 espInfo.TextWrapped = true
 espInfo.TextXAlignment = Enum.TextXAlignment.Left
 espInfo.TextYAlignment = Enum.TextYAlignment.Top
-espInfo.Parent = espTab
-
-----------------------------------------------------------------
--- GLOBAL INPUT (keybind capture untuk WalkSpeed & Noclip)
-----------------------------------------------------------------
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if capturingWSKeybind then
-        if input.UserInputType == Enum.UserInputType.Keyboard then
-            walkspeedKeybind = input.KeyCode
-            wsKeybindBtn.Text = tostring(walkspeedKeybind.Name)
-            wsKeybindBtn.BackgroundColor3 = Color3.fromRGB(70, 90, 160)
-            capturingWSKeybind = false
-        end
-        return
-    end
-
-    if capturingNoclipKeybind then
-        if input.UserInputType == Enum.UserInputType.Keyboard then
-            noclipKeybind = input.KeyCode
-            noclipKeybindBtn.Text = tostring(noclipKeybind.Name)
-            noclipKeybindBtn.BackgroundColor3 = Color3.fromRGB(70, 90, 160)
-            capturingNoclipKeybind = false
-        end
-        return
-    end
-
-    if gameProcessed then return end
-
-    if input.UserInputType == Enum.UserInputType.Keyboard then
-        if input.KeyCode == walkspeedKeybind then
-            toggleWalkSpeed()
-        elseif input.KeyCode == noclipKeybind then
-            toggleNoclip()
-            refreshNoclipToggleUI()
-        end
-    end
-end)
+espInfo.Parent = espScroll
 
 ----------------------------------------------------------------
 -- DRAG LOGIC (whole window)
@@ -1053,4 +2175,4 @@ UserInputService.InputChanged:Connect(function(input)
     end
 end)
 
-print("[Universal] WalkSpeed + Noclip + Visual + ESP loaded.")
+print("[Grand Clover Script] Loaded — WalkSpeed(F1) + Noclip(F2) + Fly(F3) + Farm(F4, slider offsets) + Visual(NoAtmosphere) + ESP")
