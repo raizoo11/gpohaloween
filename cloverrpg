@@ -17,7 +17,7 @@ local camera = workspace.CurrentCamera
 ----------------------------------------------------------------
 -- WALKSPEED
 ----------------------------------------------------------------
-local WALK_SPEED_VALUE = 30
+local WALK_SPEED_VALUE = 100
 local DEFAULT_SPEED = 16
 
 local walkSpeedEnabled = false
@@ -94,7 +94,7 @@ end
 ----------------------------------------------------------------
 -- FLY (dengan fix rubberband: SetNetworkOwner ke client)
 ----------------------------------------------------------------
-local FLY_SPEED_VALUE = 50
+local FLY_SPEED_VALUE = 140
 local flyEnabled = false
 local flyKeybind = Enum.KeyCode.F3
 local capturingFlyKeybind = false
@@ -303,7 +303,7 @@ do
 ----------------------------------------------------------------
 -- ESP: PLAYERS (nametag + HP angka, tanpa bar)
 ----------------------------------------------------------------
-local playerEspEnabled = false
+local playerEspEnabled = true
 local PLAYER_COLOR = Color3.fromRGB(0, 255, 100)
 local playerObjects = {}
 
@@ -433,7 +433,7 @@ end
 ----------------------------------------------------------------
 -- ESP: FIGHTABLE NPCS (workspace.FightableNPCS)
 ----------------------------------------------------------------
-local npcEspEnabled = false
+local npcEspEnabled = true
 local NPC_COLOR = Color3.fromRGB(255, 60, 60)
 local npcObjects = {}
 
@@ -558,7 +558,7 @@ end
 ----------------------------------------------------------------
 -- ESP: NPCS (workspace.NPCS)
 ----------------------------------------------------------------
-local npcsEspEnabled = false
+local npcsEspEnabled = true
 local NPCS_COLOR = Color3.fromRGB(0, 200, 255)
 local npcsObjects = {}
 
