@@ -7303,13 +7303,20 @@ espRight:Paragraph({
 })
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed or not flyEnabled then return end
+    if not flyEnabled then return end
+
+    -- Ctrl turun selalu diproses meskipun game menandai input sebagai processed.
+    if input.KeyCode == Enum.KeyCode.LeftControl or input.KeyCode == Enum.KeyCode.RightControl then
+        keysHeld.Down = true
+        return
+    end
+
+    if gameProcessed then return end
     if input.KeyCode == Enum.KeyCode.W then keysHeld.W = true
     elseif input.KeyCode == Enum.KeyCode.A then keysHeld.A = true
     elseif input.KeyCode == Enum.KeyCode.S then keysHeld.S = true
     elseif input.KeyCode == Enum.KeyCode.D then keysHeld.D = true
     elseif input.KeyCode == Enum.KeyCode.Space then keysHeld.Up = true
-    elseif input.KeyCode == Enum.KeyCode.LeftControl or input.KeyCode == Enum.KeyCode.RightControl then keysHeld.Down = true
     end
 end)
 
