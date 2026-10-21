@@ -1086,6 +1086,32 @@ local function removeSphinxESP(model)
     sphinxObjects[model] = nil
 end
 
+local sphinxAnswerCache = {}
+
+local function getSphinxAnswer(model)
+    local chatObjects = workspace:FindFirstChild("ChatObjects")
+    local riddles = chatObjects and chatObjects:FindFirstChild("SphinxRiddles")
+    local server = riddles and riddles:FindFirstChild("SphinxServer")
+    local utils = server and server:FindFirstChild("Utils")
+    local answerModule = utils and utils:FindFirstChild(model.Name)
+    if not answerModule or not answerModule:IsA("ModuleScript") then return nil end
+
+    if sphinxAnswerCache[answerModule] ~= nil then
+        return sphinxAnswerCache[answerModule] or nil
+    end
+
+    local ok, data = pcall(require, answerModule)
+    local answer
+    if ok and type(data) == "table" and type(data.Choices) == "table" then
+        local index = tonumber(data.CorrectChoice)
+        if index and data.Choices[index] ~= nil then
+            answer = tostring(data.Choices[index])
+        end
+    end
+    sphinxAnswerCache[answerModule] = answer or false
+    return answer
+end
+
 local function applySphinxESP(model)
     if sphinxObjects[model] or not model:IsA("Model") then return end
     local lowerName = string.lower(model.Name)
@@ -1128,9 +1154,11 @@ local function applySphinxESP(model)
         local myRoot = char and char:FindFirstChild("HumanoidRootPart")
         if myRoot then
             local distance = (myRoot.Position - part.Position).Magnitude
-            label.Text = string.format("%s [%dm]", model.Name, math.floor(distance))
+            local answer = getSphinxAnswer(model)
+            label.Text = string.format("%s [%dm]%s", model.Name, math.floor(distance), answer and (" | " .. answer) or "")
         else
-            label.Text = model.Name
+            local answer = getSphinxAnswer(model)
+            label.Text = answer and (model.Name .. " | " .. answer) or model.Name
         end
     end)
 
