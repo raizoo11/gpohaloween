@@ -1,4 +1,5 @@
 -- ================= GRAND CLOVER SCRIPT =================
+-- Build: CloverRPG-20261021-02
 -- WalkSpeed + Noclip + Fly (network-owner fix) + Farm Mob (slider offsets, 70 stud, anti-aerial) + Visual (NoFog/FullBright/NoAtmosphere) + ESP (Player/FightableNPCS/NPCS/Closed_Chest/Ores/Crops)
 
 local Players = game:GetService("Players")
