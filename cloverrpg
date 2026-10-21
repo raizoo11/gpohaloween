@@ -1234,6 +1234,15 @@ local currentFarmTarget = nil
 local farmTween = nil
 local farmApproaching = false
 
+local function isValidFarmTarget(model)
+    if not model or not model.Parent then return false end
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    local root = model:FindFirstChild("HumanoidRootPart")
+    if not hum or hum.Health <= 0 or not root then return false end
+    local dist = (root.Position - rootPart.Position).Magnitude
+    return dist <= FARM_DETECT_RANGE
+end
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local FARM_ATTACK_INTERVAL = 0.25
 
@@ -1255,15 +1264,6 @@ task.spawn(function()
         end
     end
 end)
-
-local function isValidFarmTarget(model)
-    if not model or not model.Parent then return false end
-    local hum = model:FindFirstChildOfClass("Humanoid")
-    local root = model:FindFirstChild("HumanoidRootPart")
-    if not hum or hum.Health <= 0 or not root then return false end
-    local dist = (root.Position - rootPart.Position).Magnitude
-    return dist <= FARM_DETECT_RANGE
-end
 
 local function getNearestFightableNPC()
     local folder = workspace:FindFirstChild("FightableNPCS")
