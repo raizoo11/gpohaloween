@@ -6776,7 +6776,7 @@ function MacLib:Window(Settings)
 				}
 			end,
 			Load = function(Flag, data)
-				if MacLib.Options[Flag] and data.state then
+				if MacLib.Options[Flag] and type(data.state) == "boolean" then
 					MacLib.Options[Flag]:UpdateState(data.state)
 				end
 			end
@@ -7479,6 +7479,24 @@ espRight:Paragraph({
     Header = "Tracked objects",
     Body = "Semua ESP mulai OFF. Aktifkan yang diperlukan satu per satu: players, NPC, chest, ore, crop, atau Sphinx.",
 })
+
+-- Config lokal terpisah untuk setiap UserId.
+local USER_CONFIG_NAME = "user_" .. tostring(LocalPlayer.UserId)
+MacLib:SetFolder("CloverRPG")
+pcall(function()
+    MacLib:LoadConfig(USER_CONFIG_NAME)
+end)
+
+-- Beri waktu opsi config menerapkan nilai sebelum autosave berjalan.
+task.spawn(function()
+    task.wait(1)
+    while true do
+        pcall(function()
+            MacLib:SaveConfig(USER_CONFIG_NAME)
+        end)
+        task.wait(5)
+    end
+end)
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if not flyEnabled then return end
