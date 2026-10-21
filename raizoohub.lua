@@ -6056,6 +6056,104 @@ end
 
 PrivateServer.load()
 
+-- GUI ringan untuk memasukkan kode saat berada di MAIN MENU.
+-- GUI utama dibuat setelah inisialisasi karakter, yang memang tidak tersedia di menu.
+if game.PlaceId == PrivateServer.MainMenuPlaceId then
+    pcall(function()
+        local oldGui = LocalPlayer:FindFirstChild("PlayerGui")
+            and LocalPlayer.PlayerGui:FindFirstChild("RaizooHub_PrivateServer")
+        if oldGui then oldGui:Destroy() end
+    end)
+
+    local menuGui = Instance.new("ScreenGui")
+    menuGui.Name = "RaizooHub_PrivateServer"
+    menuGui.ResetOnSpawn = false
+    menuGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+    local parent
+    pcall(function()
+        if typeof(gethui) == "function" then parent = gethui() end
+    end)
+    parent = parent or LocalPlayer:FindFirstChildOfClass("PlayerGui") or CoreGui
+    menuGui.Parent = parent
+
+    local panel = Instance.new("Frame")
+    panel.Name = "Panel"
+    panel.AnchorPoint = Vector2.new(0.5, 0.5)
+    panel.Position = UDim2.fromScale(0.5, 0.5)
+    panel.Size = UDim2.fromOffset(360, 150)
+    panel.BackgroundColor3 = Color3.fromRGB(24, 24, 30)
+    panel.BorderSizePixel = 0
+    panel.Parent = menuGui
+    Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 10)
+
+    local title = Instance.new("TextLabel")
+    title.BackgroundTransparency = 1
+    title.Position = UDim2.fromOffset(16, 10)
+    title.Size = UDim2.new(1, -32, 0, 28)
+    title.Font = Enum.Font.GothamBold
+    title.Text = "RaizooHub | Private Server"
+    title.TextColor3 = Color3.fromRGB(245, 245, 250)
+    title.TextSize = 16
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = panel
+
+    local codeBox = Instance.new("TextBox")
+    codeBox.Name = "PrivateCode"
+    codeBox.Position = UDim2.fromOffset(16, 48)
+    codeBox.Size = UDim2.new(1, -32, 0, 34)
+    codeBox.BackgroundColor3 = Color3.fromRGB(38, 38, 46)
+    codeBox.BorderSizePixel = 0
+    codeBox.ClearTextOnFocus = false
+    codeBox.Font = Enum.Font.Gotham
+    codeBox.PlaceholderText = "Masukkan kode private server"
+    codeBox.Text = PrivateServer.Code
+    codeBox.TextColor3 = Color3.fromRGB(245, 245, 250)
+    codeBox.PlaceholderColor3 = Color3.fromRGB(155, 155, 165)
+    codeBox.TextSize = 13
+    codeBox.Parent = panel
+    Instance.new("UICorner", codeBox).CornerRadius = UDim.new(0, 6)
+
+    local joinButton = Instance.new("TextButton")
+    joinButton.Position = UDim2.fromOffset(16, 92)
+    joinButton.Size = UDim2.new(1, -32, 0, 32)
+    joinButton.BackgroundColor3 = Color3.fromRGB(112, 86, 220)
+    joinButton.BorderSizePixel = 0
+    joinButton.Font = Enum.Font.GothamSemibold
+    joinButton.Text = "Simpan & Join First Sea"
+    joinButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    joinButton.TextSize = 13
+    joinButton.Parent = panel
+    Instance.new("UICorner", joinButton).CornerRadius = UDim.new(0, 6)
+
+    local status = Instance.new("TextLabel")
+    status.BackgroundTransparency = 1
+    status.Position = UDim2.fromOffset(16, 128)
+    status.Size = UDim2.new(1, -32, 0, 16)
+    status.Font = Enum.Font.Gotham
+    status.Text = "Tempel kode saja, bukan link lengkap."
+    status.TextColor3 = Color3.fromRGB(175, 175, 185)
+    status.TextSize = 10
+    status.TextXAlignment = Enum.TextXAlignment.Left
+    status.Parent = panel
+
+    joinButton.MouseButton1Click:Connect(function()
+        local code = codeBox.Text:match("^%s*(.-)%s*$") or ""
+        if code == "" then
+            status.Text = "Kode masih kosong."
+            status.TextColor3 = Color3.fromRGB(255, 150, 130)
+            return
+        end
+
+        PrivateServer.Code = code
+        PrivateServer.Enabled = true
+        PrivateServer.save()
+        status.Text = "Kode disimpan. Mencoba masuk ke First Sea..."
+        status.TextColor3 = Color3.fromRGB(150, 230, 170)
+        PrivateServer.runMenuLoop()
+    end)
+end
+
 -- Di MAIN MENU: cuma ngurusin join private server, script farm gak dijalankan di sini
 -- (di menu belum ada dunia game / event door).
 if game.PlaceId == PrivateServer.MainMenuPlaceId then
