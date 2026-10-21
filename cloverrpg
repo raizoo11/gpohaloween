@@ -7423,9 +7423,17 @@ farmLeft:Dropdown({
     Required = true,
     Callback = function(value) if value then farmMode = value end end,
 }, "FarmPosition")
+farmLeft:Slider({
+    Name = "Farm radius",
+    Default = FARM_DETECT_RANGE,
+    Minimum = 10,
+    Maximum = 500,
+    Precision = 0,
+    Callback = function(value) FARM_DETECT_RANGE = value end,
+}, "FarmRadius")
 farmLeft:Paragraph({
     Header = "Target",
-    Body = "Target workspace.FightableNPCS dalam radius 70 stud. Freefall dinonaktifkan selama farm aktif.",
+    Body = "Target workspace.FightableNPCS di dalam radius yang dipilih. Freefall dinonaktifkan selama farm aktif.",
 })
 
 local FARM_MIN_XZ, FARM_MAX_XZ = -50, 50
