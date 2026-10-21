@@ -1255,7 +1255,7 @@ task.spawn(function()
             local remote = system and system:FindFirstChild("ByteNetReliable")
             if remote and remote:IsA("RemoteEvent") then
                 pcall(function()
-                    remote:FireServer(buffer.fromstring("\\003\\v\\000LightAttack\\000"))
+                    remote:FireServer(buffer.fromstring("\003\v\000LightAttack\000"))
                 end)
             end
             task.wait(FARM_ATTACK_INTERVAL)
