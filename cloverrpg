@@ -4,6 +4,7 @@
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 local Lighting = game:GetService("Lighting")
 local UserInputService = game:GetService("UserInputService")
 local CoreGui = game:GetService("CoreGui")
@@ -1228,6 +1229,8 @@ local capturingFarmKeybind = false
 local FARM_DETECT_RANGE = 70
 
 local currentFarmTarget = nil
+local farmTween = nil
+local farmApproaching = false
 
 local function isValidFarmTarget(model)
     if not model or not model.Parent then return false end
@@ -1278,14 +1281,48 @@ local function computeFarmCFrame(targetRoot)
     return CFrame.new(offsetPos, targetCFrame.Position)
 end
 
+local function setFarmTarget(target)
+    if farmTween then
+        farmTween:Cancel()
+        farmTween = nil
+    end
+    currentFarmTarget = target
+    farmApproaching = false
+
+    if not farmEnabled or not target or not rootPart then return end
+    local targetRoot = target:FindFirstChild("HumanoidRootPart")
+    if not targetRoot then return end
+
+    local destination = computeFarmCFrame(targetRoot)
+    local distance = (rootPart.Position - destination.Position).Magnitude
+    if distance <= 8 then return end
+
+    farmApproaching = true
+    local duration = math.clamp(distance / 70, 0.35, 1.5)
+    farmTween = TweenService:Create(
+        rootPart,
+        TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+        { CFrame = destination }
+    )
+    local activeTween = farmTween
+    activeTween.Completed:Connect(function(playbackState)
+        if farmTween ~= activeTween then return end
+        farmTween = nil
+        farmApproaching = false
+    end)
+    activeTween:Play()
+end
+
 RunService.Heartbeat:Connect(function()
     if not farmEnabled then return end
     if not character or not character.Parent then return end
     if flyEnabled then return end
 
     if not isValidFarmTarget(currentFarmTarget) then
-        currentFarmTarget = getNearestFightableNPC()
+        setFarmTarget(getNearestFightableNPC())
     end
+
+    if farmApproaching then return end
 
     if currentFarmTarget then
         local targetRoot = currentFarmTarget:FindFirstChild("HumanoidRootPart")
@@ -1307,7 +1344,7 @@ task.spawn(function()
                 local currentDist = (currentFarmTarget.HumanoidRootPart.Position - rootPart.Position).Magnitude
                 local betterDist = (betterTarget.HumanoidRootPart.Position - rootPart.Position).Magnitude
                 if betterDist < currentDist - 5 then
-                    currentFarmTarget = betterTarget
+                    setFarmTarget(betterTarget)
                 end
             end
         end
@@ -1318,10 +1355,15 @@ end)
 local function toggleFarm()
     farmEnabled = not farmEnabled
     if farmEnabled then
-        currentFarmTarget = nil
+        setFarmTarget(nil)
         humanoid:SetStateEnabled(Enum.HumanoidStateType.Freefall, false)
         humanoid:ChangeState(Enum.HumanoidStateType.Running)
     else
+        if farmTween then
+            farmTween:Cancel()
+            farmTween = nil
+        end
+        farmApproaching = false
         currentFarmTarget = nil
         humanoid:SetStateEnabled(Enum.HumanoidStateType.Freefall, true)
     end
