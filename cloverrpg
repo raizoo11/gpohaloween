@@ -201,7 +201,7 @@ end
 ----------------------------------------------------------------
 -- VISUAL: NOFOG + FULLBRIGHT + NO ATMOSPHERE
 ----------------------------------------------------------------
-local visualEnabled = false
+local visualEnabled = true
 local savedAtmosphereData = {}
 
 local originalLighting = {
@@ -277,6 +277,8 @@ local function toggleVisual()
     visualEnabled = not visualEnabled
     applyVisual()
 end
+
+applyVisual()
 
 task.spawn(function()
     while true do
