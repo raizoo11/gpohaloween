@@ -302,7 +302,7 @@ do
 ----------------------------------------------------------------
 -- ESP: PLAYERS (nametag + HP angka, tanpa bar)
 ----------------------------------------------------------------
-local playerEspEnabled = true
+local playerEspEnabled = false
 local PLAYER_COLOR = Color3.fromRGB(0, 255, 100)
 local playerObjects = {}
 
@@ -432,7 +432,7 @@ end
 ----------------------------------------------------------------
 -- ESP: FIGHTABLE NPCS (workspace.FightableNPCS)
 ----------------------------------------------------------------
-local npcEspEnabled = true
+local npcEspEnabled = false
 local NPC_COLOR = Color3.fromRGB(255, 60, 60)
 local npcObjects = {}
 
@@ -557,7 +557,7 @@ end
 ----------------------------------------------------------------
 -- ESP: NPCS (workspace.NPCS)
 ----------------------------------------------------------------
-local npcsEspEnabled = true
+local npcsEspEnabled = false
 local NPCS_COLOR = Color3.fromRGB(0, 200, 255)
 local npcsObjects = {}
 
@@ -682,7 +682,7 @@ end
 ----------------------------------------------------------------
 -- ESP: CLOSED CHEST (workspace.Objects.Closed_Chest) - MULTI INSTANCE
 ----------------------------------------------------------------
-local chestEspEnabled = true
+local chestEspEnabled = false
 local CHEST_COLOR = Color3.fromRGB(255, 215, 0)
 local chestObjects = {}
 
@@ -804,7 +804,7 @@ end
 ----------------------------------------------------------------
 -- ESP: ORES (workspace.Map.Harvestable.Ores) - MULTI INSTANCE
 ----------------------------------------------------------------
-local oreEspEnabled = true
+local oreEspEnabled = false
 local ORE_COLOR = Color3.fromRGB(150, 220, 255)
 local oreObjects = {}
 
@@ -938,7 +938,7 @@ end
 ----------------------------------------------------------------
 -- ESP: CROPS (workspace.Map.Harvestable.Crops) - MULTI INSTANCE
 ----------------------------------------------------------------
-local cropEspEnabled = true
+local cropEspEnabled = false
 local CROP_COLOR = Color3.fromRGB(120, 255, 120)
 local cropObjects = {}
 
@@ -7102,7 +7102,7 @@ local MacLib = loadMacLib()
 local Window = MacLib:Window({
     Title = "Grand Clover",
     Subtitle = "CloverRPG",
-    Size = UDim2.fromOffset(760, 560),
+    Size = UDim2.fromOffset(520, 440),
     DragStyle = 1,
     DisabledWindowControls = {},
     ShowUserInfo = false,
