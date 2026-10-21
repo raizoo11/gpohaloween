@@ -1,1 +1,1056 @@
+-- ================= UNIVERSAL SCRIPT: WALKSPEED + NOCLIP + VISUAL + ESP =================
 
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+
+local LocalPlayer = Players.LocalPlayer
+local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+
+----------------------------------------------------------------
+-- WALKSPEED
+----------------------------------------------------------------
+local WALK_SPEED_VALUE = 30
+local DEFAULT_SPEED = 16
+
+local walkSpeedEnabled = false
+local enforcingSpeed = false
+local walkspeedKeybind = Enum.KeyCode.F1
+local capturingWSKeybind = false
+
+local function applyWalkSpeed()
+    local targetSpeed = walkSpeedEnabled and WALK_SPEED_VALUE or DEFAULT_SPEED
+    if humanoid.WalkSpeed ~= targetSpeed then
+        enforcingSpeed = true
+        humanoid.WalkSpeed = targetSpeed
+        enforcingSpeed = false
+    end
+end
+
+local function watchWalkSpeed(hum)
+    hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+        if enforcingSpeed then return end
+        if walkSpeedEnabled then applyWalkSpeed() end
+    end)
+end
+watchWalkSpeed(humanoid)
+
+----------------------------------------------------------------
+-- NOCLIP
+----------------------------------------------------------------
+local noclipEnabled = false
+local noclipConn = nil
+local noclipKeybind = Enum.KeyCode.F2
+local capturingNoclipKeybind = false
+
+local function startNoclip()
+    if noclipConn then return end
+    noclipConn = RunService.Stepped:Connect(function()
+        if character then
+            for _, v in pairs(character:GetDescendants()) do
+                if v:IsA("BasePart") and v.CanCollide then
+                    v.CanCollide = false
+                end
+            end
+        end
+    end)
+end
+
+local function stopNoclip()
+    if noclipConn then
+        noclipConn:Disconnect()
+        noclipConn = nil
+    end
+    if character then
+        for _, v in pairs(character:GetDescendants()) do
+            if v:IsA("BasePart") then
+                v.CanCollide = true
+            end
+        end
+    end
+end
+
+local function toggleNoclip()
+    noclipEnabled = not noclipEnabled
+    if noclipEnabled then
+        startNoclip()
+    else
+        stopNoclip()
+    end
+end
+
+LocalPlayer.CharacterAdded:Connect(function(newChar)
+    character = newChar
+    humanoid = newChar:WaitForChild("Humanoid")
+    applyWalkSpeed()
+    watchWalkSpeed(humanoid)
+    if noclipEnabled then
+        startNoclip()
+    end
+end)
+
+----------------------------------------------------------------
+-- VISUAL: NOFOG + FULLBRIGHT
+----------------------------------------------------------------
+local visualEnabled = false
+
+local originalLighting = {
+    FogEnd = Lighting.FogEnd,
+    FogStart = Lighting.FogStart,
+    Brightness = Lighting.Brightness,
+    ClockTime = Lighting.ClockTime,
+    Ambient = Lighting.Ambient,
+    OutdoorAmbient = Lighting.OutdoorAmbient,
+    GlobalShadows = Lighting.GlobalShadows,
+}
+
+local function applyVisual()
+    if visualEnabled then
+        Lighting.FogEnd = 100000
+        Lighting.FogStart = 0
+        Lighting.Brightness = 2
+        Lighting.ClockTime = 14
+        Lighting.Ambient = Color3.fromRGB(200, 200, 200)
+        Lighting.OutdoorAmbient = Color3.fromRGB(200, 200, 200)
+        Lighting.GlobalShadows = false
+    else
+        Lighting.FogEnd = originalLighting.FogEnd
+        Lighting.FogStart = originalLighting.FogStart
+        Lighting.Brightness = originalLighting.Brightness
+        Lighting.ClockTime = originalLighting.ClockTime
+        Lighting.Ambient = originalLighting.Ambient
+        Lighting.OutdoorAmbient = originalLighting.OutdoorAmbient
+        Lighting.GlobalShadows = originalLighting.GlobalShadows
+    end
+end
+
+task.spawn(function()
+    while true do
+        if visualEnabled then
+            if Lighting.FogEnd ~= 100000 then Lighting.FogEnd = 100000 end
+            if Lighting.FogStart ~= 0 then Lighting.FogStart = 0 end
+            if Lighting.Brightness ~= 2 then Lighting.Brightness = 2 end
+        end
+        task.wait(1)
+    end
+end)
+
+----------------------------------------------------------------
+-- ESP: TRINKET SPAWNS (workspace.TrinketSpawns)
+----------------------------------------------------------------
+local trinketEspEnabled = true
+local TRINKET_COLOR = Color3.fromRGB(255, 215, 0)
+local trinketObjects = {}
+
+local function removeTrinketESP(inst)
+    local data = trinketObjects[inst]
+    if data then
+        if data.highlight then data.highlight:Destroy() end
+        if data.billboard then data.billboard:Destroy() end
+        if data.conn then data.conn:Disconnect() end
+        trinketObjects[inst] = nil
+    end
+end
+
+local function applyTrinketESP(inst)
+    if trinketObjects[inst] then return end
+
+    local part = inst:IsA("BasePart") and inst or inst:FindFirstChildWhichIsA("BasePart")
+    if not part then return end
+
+    local highlight = Instance.new("Highlight")
+    highlight.FillColor = TRINKET_COLOR
+    highlight.OutlineColor = Color3.new(1, 1, 1)
+    highlight.FillTransparency = 0.3
+    highlight.OutlineTransparency = 0
+    highlight.Parent = inst
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Size = UDim2.new(0, 180, 0, 40)
+    billboard.StudsOffset = Vector3.new(0, 2, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Adornee = part
+    billboard.Parent = part
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.TextColor3 = TRINKET_COLOR
+    label.TextStrokeTransparency = 0
+    label.TextScaled = true
+    label.Font = Enum.Font.GothamBold
+    label.Text = inst.Name
+    label.Parent = billboard
+
+    local conn = RunService.Heartbeat:Connect(function()
+        local char = LocalPlayer.Character
+        if char and char:FindFirstChild("HumanoidRootPart") and part.Parent then
+            local dist = (char.HumanoidRootPart.Position - part.Position).Magnitude
+            label.Text = string.format("%s [%dm]", inst.Name, math.floor(dist))
+        end
+    end)
+
+    trinketObjects[inst] = { highlight = highlight, billboard = billboard, conn = conn }
+end
+
+local function scanTrinketSpawns()
+    local folder = workspace:FindFirstChild("TrinketSpawns")
+    if not folder then return end
+    if trinketEspEnabled then
+        for _, child in ipairs(folder:GetChildren()) do
+            applyTrinketESP(child)
+        end
+    end
+end
+
+local trinketFolder = workspace:FindFirstChild("TrinketSpawns")
+if trinketFolder then
+    trinketFolder.ChildAdded:Connect(function(child)
+        if trinketEspEnabled then
+            task.wait(0.1)
+            applyTrinketESP(child)
+        end
+    end)
+    trinketFolder.ChildRemoved:Connect(function(child)
+        removeTrinketESP(child)
+    end)
+end
+
+task.spawn(function()
+    task.wait(1)
+    scanTrinketSpawns()
+end)
+
+local function toggleTrinketESP()
+    trinketEspEnabled = not trinketEspEnabled
+    if trinketEspEnabled then
+        scanTrinketSpawns()
+    else
+        for inst, _ in pairs(trinketObjects) do
+            removeTrinketESP(inst)
+        end
+    end
+end
+
+----------------------------------------------------------------
+-- ESP: PLAYERS (nametag + HP)
+----------------------------------------------------------------
+local playerEspEnabled = true
+local PLAYER_COLOR = Color3.fromRGB(0, 255, 100)
+local playerObjects = {}
+
+local function removePlayerESP(plr)
+    local data = playerObjects[plr]
+    if data then
+        if data.highlight then data.highlight:Destroy() end
+        if data.billboard then data.billboard:Destroy() end
+        if data.conn then data.conn:Disconnect() end
+        playerObjects[plr] = nil
+    end
+end
+
+local function applyPlayerESP(plr)
+    if plr == LocalPlayer then return end
+    if not plr.Character then return end
+    if playerObjects[plr] then return end
+
+    local char = plr.Character
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not hum or not root then return end
+
+    local highlight = Instance.new("Highlight")
+    highlight.FillColor = PLAYER_COLOR
+    highlight.OutlineColor = Color3.new(1, 1, 1)
+    highlight.FillTransparency = 0.5
+    highlight.OutlineTransparency = 0
+    highlight.Parent = char
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Size = UDim2.new(0, 160, 0, 50)
+    billboard.StudsOffset = Vector3.new(0, 3, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Adornee = root
+    billboard.Parent = root
+
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Size = UDim2.new(1, 0, 0, 20)
+    nameLabel.Position = UDim2.new(0, 0, 0, 0)
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.TextColor3 = PLAYER_COLOR
+    nameLabel.TextStrokeTransparency = 0
+    nameLabel.TextScaled = true
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.Text = plr.Name
+    nameLabel.Parent = billboard
+
+    local hpBarBg = Instance.new("Frame")
+    hpBarBg.Size = UDim2.new(1, 0, 0, 8)
+    hpBarBg.Position = UDim2.new(0, 0, 0, 22)
+    hpBarBg.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    hpBarBg.BorderSizePixel = 0
+    hpBarBg.Parent = billboard
+
+    local hpBarFill = Instance.new("Frame")
+    hpBarFill.Size = UDim2.new(1, 0, 1, 0)
+    hpBarFill.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+    hpBarFill.BorderSizePixel = 0
+    hpBarFill.Parent = hpBarBg
+
+    local hpLabel = Instance.new("TextLabel")
+    hpLabel.Size = UDim2.new(1, 0, 0, 14)
+    hpLabel.Position = UDim2.new(0, 0, 0, 32)
+    hpLabel.BackgroundTransparency = 1
+    hpLabel.TextColor3 = Color3.new(1, 1, 1)
+    hpLabel.TextStrokeTransparency = 0
+    hpLabel.TextScaled = true
+    hpLabel.Font = Enum.Font.Gotham
+    hpLabel.Text = string.format("%d/%d", math.floor(hum.Health), math.floor(hum.MaxHealth))
+    hpLabel.Parent = billboard
+
+    local conn = RunService.Heartbeat:Connect(function()
+        if not root.Parent or not hum.Parent then return end
+
+        local hpAlpha = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
+        hpBarFill.Size = UDim2.new(hpAlpha, 0, 1, 0)
+        hpBarFill.BackgroundColor3 = Color3.fromRGB(255 * (1 - hpAlpha), 255 * hpAlpha, 0)
+        hpLabel.Text = string.format("%d/%d", math.floor(hum.Health), math.floor(hum.MaxHealth))
+
+        local myChar = LocalPlayer.Character
+        if myChar and myChar:FindFirstChild("HumanoidRootPart") then
+            local dist = (myChar.HumanoidRootPart.Position - root.Position).Magnitude
+            nameLabel.Text = string.format("%s [%dm]", plr.Name, math.floor(dist))
+        end
+    end)
+
+    playerObjects[plr] = { highlight = highlight, billboard = billboard, conn = conn }
+end
+
+local function refreshAllPlayerESP()
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if playerEspEnabled then
+            applyPlayerESP(plr)
+        else
+            removePlayerESP(plr)
+        end
+    end
+end
+
+Players.PlayerAdded:Connect(function(plr)
+    plr.CharacterAdded:Connect(function()
+        removePlayerESP(plr)
+        task.wait(0.5)
+        if playerEspEnabled then applyPlayerESP(plr) end
+    end)
+end)
+
+for _, plr in ipairs(Players:GetPlayers()) do
+    if plr ~= LocalPlayer then
+        plr.CharacterAdded:Connect(function()
+            removePlayerESP(plr)
+            task.wait(0.5)
+            if playerEspEnabled then applyPlayerESP(plr) end
+        end)
+    end
+end
+
+Players.PlayerRemoving:Connect(function(plr)
+    removePlayerESP(plr)
+end)
+
+task.spawn(function()
+    while true do
+        if playerEspEnabled then
+            refreshAllPlayerESP()
+        end
+        task.wait(2)
+    end
+end)
+
+local function togglePlayerESP()
+    playerEspEnabled = not playerEspEnabled
+    if playerEspEnabled then
+        refreshAllPlayerESP()
+    else
+        for plr, _ in pairs(playerObjects) do
+            removePlayerESP(plr)
+        end
+    end
+end
+
+----------------------------------------------------------------
+-- ESP: MONSTERS (nametag + HP) (workspace.Monsters)
+----------------------------------------------------------------
+local monsterEspEnabled = true
+local MONSTER_COLOR = Color3.fromRGB(255, 0, 0)
+local monsterObjects = {}
+
+local function removeMonsterESP(inst)
+    local data = monsterObjects[inst]
+    if data then
+        if data.highlight then data.highlight:Destroy() end
+        if data.billboard then data.billboard:Destroy() end
+        if data.conn then data.conn:Disconnect() end
+        monsterObjects[inst] = nil
+    end
+end
+
+local function applyMonsterESP(inst)
+    if monsterObjects[inst] then return end
+
+    local hum = inst:FindFirstChildOfClass("Humanoid")
+    local root = inst:FindFirstChild("HumanoidRootPart") or inst:FindFirstChild("Torso")
+
+    local highlight = Instance.new("Highlight")
+    highlight.FillColor = MONSTER_COLOR
+    highlight.OutlineColor = Color3.new(1, 1, 1)
+    highlight.FillTransparency = 0.5
+    highlight.OutlineTransparency = 0
+    highlight.Parent = inst
+
+    local billboard, conn
+
+    if root then
+        billboard = Instance.new("BillboardGui")
+        billboard.Size = UDim2.new(0, 180, 0, hum and 50 or 30)
+        billboard.StudsOffset = Vector3.new(0, 3, 0)
+        billboard.AlwaysOnTop = true
+        billboard.Adornee = root
+        billboard.Parent = root
+
+        local nameLabel = Instance.new("TextLabel")
+        nameLabel.Size = UDim2.new(1, 0, 0, 20)
+        nameLabel.Position = UDim2.new(0, 0, 0, 0)
+        nameLabel.BackgroundTransparency = 1
+        nameLabel.TextColor3 = MONSTER_COLOR
+        nameLabel.TextStrokeTransparency = 0
+        nameLabel.TextScaled = true
+        nameLabel.Font = Enum.Font.GothamBold
+        nameLabel.Text = inst.Name
+        nameLabel.Parent = billboard
+
+        local hpBarFill, hpLabel
+
+        if hum then
+            local hpBarBg = Instance.new("Frame")
+            hpBarBg.Size = UDim2.new(1, 0, 0, 8)
+            hpBarBg.Position = UDim2.new(0, 0, 0, 22)
+            hpBarBg.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+            hpBarBg.BorderSizePixel = 0
+            hpBarBg.Parent = billboard
+
+            hpBarFill = Instance.new("Frame")
+            hpBarFill.Size = UDim2.new(1, 0, 1, 0)
+            hpBarFill.BackgroundColor3 = Color3.fromRGB(0, 255, 0)
+            hpBarFill.BorderSizePixel = 0
+            hpBarFill.Parent = hpBarBg
+
+            hpLabel = Instance.new("TextLabel")
+            hpLabel.Size = UDim2.new(1, 0, 0, 14)
+            hpLabel.Position = UDim2.new(0, 0, 0, 32)
+            hpLabel.BackgroundTransparency = 1
+            hpLabel.TextColor3 = Color3.new(1, 1, 1)
+            hpLabel.TextStrokeTransparency = 0
+            hpLabel.TextScaled = true
+            hpLabel.Font = Enum.Font.Gotham
+            hpLabel.Text = string.format("%d/%d", math.floor(hum.Health), math.floor(hum.MaxHealth))
+            hpLabel.Parent = billboard
+        end
+
+        conn = RunService.Heartbeat:Connect(function()
+            if not root.Parent then return end
+
+            if hum and hpBarFill and hpLabel then
+                local hpAlpha = math.clamp(hum.Health / hum.MaxHealth, 0, 1)
+                hpBarFill.Size = UDim2.new(hpAlpha, 0, 1, 0)
+                hpBarFill.BackgroundColor3 = Color3.fromRGB(255 * (1 - hpAlpha), 255 * hpAlpha, 0)
+                hpLabel.Text = string.format("%d/%d", math.floor(hum.Health), math.floor(hum.MaxHealth))
+            end
+
+            local char = LocalPlayer.Character
+            if char and char:FindFirstChild("HumanoidRootPart") then
+                local dist = (char.HumanoidRootPart.Position - root.Position).Magnitude
+                nameLabel.Text = string.format("%s [%dm]", inst.Name, math.floor(dist))
+            end
+        end)
+    end
+
+    monsterObjects[inst] = { highlight = highlight, billboard = billboard, conn = conn }
+end
+
+local function scanMonsters()
+    local folder = workspace:FindFirstChild("Monsters")
+    if not folder then return end
+    if monsterEspEnabled then
+        for _, child in ipairs(folder:GetChildren()) do
+            if child:IsA("Model") then
+                applyMonsterESP(child)
+            end
+        end
+    end
+end
+
+local monstersFolder = workspace:FindFirstChild("Monsters")
+if monstersFolder then
+    monstersFolder.ChildAdded:Connect(function(child)
+        if monsterEspEnabled and child:IsA("Model") then
+            task.wait(0.1)
+            applyMonsterESP(child)
+        end
+    end)
+    monstersFolder.ChildRemoved:Connect(function(child)
+        removeMonsterESP(child)
+    end)
+end
+
+task.spawn(function()
+    task.wait(1)
+    scanMonsters()
+end)
+
+local function toggleMonsterESP()
+    monsterEspEnabled = not monsterEspEnabled
+    if monsterEspEnabled then
+        scanMonsters()
+    else
+        for inst, _ in pairs(monsterObjects) do
+            removeMonsterESP(inst)
+        end
+    end
+end
+
+----------------------------------------------------------------
+-- GUI
+----------------------------------------------------------------
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "UniversalGUI"
+ScreenGui.ResetOnSpawn = false
+pcall(function() ScreenGui.Parent = CoreGui end)
+if not ScreenGui.Parent then
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+end
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 260, 0, 440)
+MainFrame.Position = UDim2.new(0, 20, 0, 100)
+MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Parent = ScreenGui
+
+local UICorner = Instance.new("UICorner")
+UICorner.CornerRadius = UDim.new(0, 8)
+UICorner.Parent = MainFrame
+
+local TitleBar = Instance.new("Frame")
+TitleBar.Size = UDim2.new(1, 0, 0, 34)
+TitleBar.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+TitleBar.BorderSizePixel = 0
+TitleBar.Parent = MainFrame
+
+local TitleCorner = Instance.new("UICorner")
+TitleCorner.CornerRadius = UDim.new(0, 8)
+TitleCorner.Parent = TitleBar
+
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size = UDim2.new(1, -40, 1, 0)
+TitleLabel.Position = UDim2.new(0, 10, 0, 0)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text = "Universal"
+TitleLabel.TextColor3 = Color3.new(1, 1, 1)
+TitleLabel.Font = Enum.Font.GothamBold
+TitleLabel.TextSize = 16
+TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+TitleLabel.Parent = TitleBar
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 24, 0, 22)
+closeBtn.Position = UDim2.new(1, -30, 0, 6)
+closeBtn.BackgroundColor3 = Color3.fromRGB(130, 45, 45)
+closeBtn.Text = "X"
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.TextSize = 12
+closeBtn.TextColor3 = Color3.new(1, 1, 1)
+closeBtn.Parent = TitleBar
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 6)
+closeCorner.Parent = closeBtn
+
+closeBtn.MouseButton1Click:Connect(function()
+    MainFrame.Visible = not MainFrame.Visible
+end)
+
+local TABS = {"Move", "Visual", "ESP"}
+local tabButtons = {}
+local tabFrames = {}
+
+local tabBarWidth = 1 / #TABS
+
+for i, tabName in ipairs(TABS) do
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(tabBarWidth, -4, 0, 24)
+    btn.Position = UDim2.new((i - 1) * tabBarWidth, 2, 0, 40)
+    btn.BackgroundColor3 = (i == 1) and Color3.fromRGB(70, 90, 160) or Color3.fromRGB(55, 55, 55)
+    btn.Text = tabName
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 12
+    btn.Parent = MainFrame
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = btn
+
+    tabButtons[tabName] = btn
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, -16, 1, -78)
+    frame.Position = UDim2.new(0, 8, 0, 70)
+    frame.BackgroundTransparency = 1
+    frame.Visible = (i == 1)
+    frame.Parent = MainFrame
+
+    tabFrames[tabName] = frame
+end
+
+local function switchTab(activeTab)
+    for name, btn in pairs(tabButtons) do
+        local isActive = (name == activeTab)
+        btn.BackgroundColor3 = isActive and Color3.fromRGB(70, 90, 160) or Color3.fromRGB(55, 55, 55)
+        tabFrames[name].Visible = isActive
+    end
+end
+
+for _, tabName in ipairs(TABS) do
+    tabButtons[tabName].MouseButton1Click:Connect(function()
+        switchTab(tabName)
+    end)
+end
+
+-- =========================================================
+-- TAB: MOVE (WalkSpeed + Noclip)
+-- =========================================================
+local moveTab = tabFrames["Move"]
+
+-- ===== WalkSpeed section =====
+local wsToggleBtn = Instance.new("TextButton")
+wsToggleBtn.Size = UDim2.new(1, 0, 0, 30)
+wsToggleBtn.Position = UDim2.new(0, 0, 0, 0)
+wsToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+wsToggleBtn.Text = "WalkSpeed: OFF"
+wsToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+wsToggleBtn.Font = Enum.Font.GothamBold
+wsToggleBtn.TextSize = 13
+wsToggleBtn.Parent = moveTab
+
+local wsToggleCorner = Instance.new("UICorner")
+wsToggleCorner.CornerRadius = UDim.new(0, 6)
+wsToggleCorner.Parent = wsToggleBtn
+
+local function refreshWsToggleUI()
+    if walkSpeedEnabled then
+        wsToggleBtn.Text = "WalkSpeed: ON"
+        wsToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 70)
+    else
+        wsToggleBtn.Text = "WalkSpeed: OFF"
+        wsToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+    end
+end
+
+local function toggleWalkSpeed()
+    walkSpeedEnabled = not walkSpeedEnabled
+    applyWalkSpeed()
+    refreshWsToggleUI()
+end
+
+wsToggleBtn.MouseButton1Click:Connect(toggleWalkSpeed)
+
+local speedValueLabel = Instance.new("TextLabel")
+speedValueLabel.Size = UDim2.new(1, 0, 0, 16)
+speedValueLabel.Position = UDim2.new(0, 0, 0, 40)
+speedValueLabel.BackgroundTransparency = 1
+speedValueLabel.Text = "Speed Value: " .. WALK_SPEED_VALUE
+speedValueLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
+speedValueLabel.Font = Enum.Font.GothamBold
+speedValueLabel.TextSize = 12
+speedValueLabel.TextXAlignment = Enum.TextXAlignment.Left
+speedValueLabel.Parent = moveTab
+
+local MIN_SPEED, MAX_SPEED = 10, 200
+
+local sliderTrack = Instance.new("Frame")
+sliderTrack.Size = UDim2.new(1, 0, 0, 8)
+sliderTrack.Position = UDim2.new(0, 0, 0, 60)
+sliderTrack.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+sliderTrack.BorderSizePixel = 0
+sliderTrack.Parent = moveTab
+
+local trackCorner = Instance.new("UICorner")
+trackCorner.CornerRadius = UDim.new(1, 0)
+trackCorner.Parent = sliderTrack
+
+local function speedToAlpha(speed)
+    return math.clamp((speed - MIN_SPEED) / (MAX_SPEED - MIN_SPEED), 0, 1)
+end
+
+local sliderFill = Instance.new("Frame")
+sliderFill.Size = UDim2.new(speedToAlpha(WALK_SPEED_VALUE), 0, 1, 0)
+sliderFill.BackgroundColor3 = Color3.fromRGB(70, 140, 220)
+sliderFill.BorderSizePixel = 0
+sliderFill.Parent = sliderTrack
+
+local fillCorner = Instance.new("UICorner")
+fillCorner.CornerRadius = UDim.new(1, 0)
+fillCorner.Parent = sliderFill
+
+local knob = Instance.new("Frame")
+knob.Size = UDim2.new(0, 16, 0, 16)
+knob.AnchorPoint = Vector2.new(0.5, 0.5)
+knob.Position = UDim2.new(speedToAlpha(WALK_SPEED_VALUE), 0, 0.5, 0)
+knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+knob.BorderSizePixel = 0
+knob.Parent = sliderTrack
+
+local knobCorner = Instance.new("UICorner")
+knobCorner.CornerRadius = UDim.new(1, 0)
+knobCorner.Parent = knob
+
+local speedInput = Instance.new("TextBox")
+speedInput.Size = UDim2.new(1, 0, 0, 28)
+speedInput.Position = UDim2.new(0, 0, 0, 78)
+speedInput.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+speedInput.Text = tostring(WALK_SPEED_VALUE)
+speedInput.PlaceholderText = "Ketik angka speed..."
+speedInput.TextColor3 = Color3.new(1, 1, 1)
+speedInput.Font = Enum.Font.GothamBold
+speedInput.TextSize = 13
+speedInput.ClearTextOnFocus = false
+speedInput.Parent = moveTab
+
+local speedInputCorner = Instance.new("UICorner")
+speedInputCorner.CornerRadius = UDim.new(0, 6)
+speedInputCorner.Parent = speedInput
+
+local function setWalkSpeedValue(newValue)
+    newValue = math.clamp(math.floor(newValue + 0.5), MIN_SPEED, MAX_SPEED)
+    WALK_SPEED_VALUE = newValue
+    speedValueLabel.Text = "Speed Value: " .. WALK_SPEED_VALUE
+    speedInput.Text = tostring(WALK_SPEED_VALUE)
+    local alpha = speedToAlpha(WALK_SPEED_VALUE)
+    sliderFill.Size = UDim2.new(alpha, 0, 1, 0)
+    knob.Position = UDim2.new(alpha, 0, 0.5, 0)
+    if walkSpeedEnabled then applyWalkSpeed() end
+end
+
+local draggingSlider = false
+
+local function updateFromSliderInput(inputX)
+    local trackAbsPos = sliderTrack.AbsolutePosition.X
+    local trackAbsSize = sliderTrack.AbsoluteSize.X
+    local alpha = math.clamp((inputX - trackAbsPos) / trackAbsSize, 0, 1)
+    local newSpeed = MIN_SPEED + alpha * (MAX_SPEED - MIN_SPEED)
+    setWalkSpeedValue(newSpeed)
+end
+
+knob.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        draggingSlider = true
+    end
+end)
+
+sliderTrack.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        draggingSlider = true
+        updateFromSliderInput(input.Position.X)
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if draggingSlider and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        updateFromSliderInput(input.Position.X)
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        draggingSlider = false
+    end
+end)
+
+speedInput.FocusLost:Connect(function()
+    local num = tonumber(speedInput.Text)
+    if num then
+        setWalkSpeedValue(num)
+    else
+        speedInput.Text = tostring(WALK_SPEED_VALUE)
+    end
+end)
+
+local wsKeybindLabel = Instance.new("TextLabel")
+wsKeybindLabel.Size = UDim2.new(1, 0, 0, 14)
+wsKeybindLabel.Position = UDim2.new(0, 0, 0, 114)
+wsKeybindLabel.BackgroundTransparency = 1
+wsKeybindLabel.Text = "Keybind WalkSpeed:"
+wsKeybindLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
+wsKeybindLabel.Font = Enum.Font.GothamBold
+wsKeybindLabel.TextSize = 12
+wsKeybindLabel.TextXAlignment = Enum.TextXAlignment.Left
+wsKeybindLabel.Parent = moveTab
+
+local wsKeybindBtn = Instance.new("TextButton")
+wsKeybindBtn.Size = UDim2.new(1, 0, 0, 26)
+wsKeybindBtn.Position = UDim2.new(0, 0, 0, 130)
+wsKeybindBtn.BackgroundColor3 = Color3.fromRGB(70, 90, 160)
+wsKeybindBtn.Text = "F1"
+wsKeybindBtn.TextColor3 = Color3.new(1, 1, 1)
+wsKeybindBtn.Font = Enum.Font.GothamBold
+wsKeybindBtn.TextSize = 13
+wsKeybindBtn.Parent = moveTab
+
+local wsKeybindBtnCorner = Instance.new("UICorner")
+wsKeybindBtnCorner.CornerRadius = UDim.new(0, 6)
+wsKeybindBtnCorner.Parent = wsKeybindBtn
+
+wsKeybindBtn.MouseButton1Click:Connect(function()
+    if capturingWSKeybind then return end
+    capturingWSKeybind = true
+    wsKeybindBtn.Text = "Tekan tombol..."
+    wsKeybindBtn.BackgroundColor3 = Color3.fromRGB(160, 130, 40)
+end)
+
+-- ===== Divider =====
+local moveDivider = Instance.new("Frame")
+moveDivider.Size = UDim2.new(1, 0, 0, 1)
+moveDivider.Position = UDim2.new(0, 0, 0, 164)
+moveDivider.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+moveDivider.BorderSizePixel = 0
+moveDivider.Parent = moveTab
+
+-- ===== Noclip section =====
+local noclipToggleBtn = Instance.new("TextButton")
+noclipToggleBtn.Size = UDim2.new(1, 0, 0, 30)
+noclipToggleBtn.Position = UDim2.new(0, 0, 0, 172)
+noclipToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+noclipToggleBtn.Text = "Noclip: OFF"
+noclipToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+noclipToggleBtn.Font = Enum.Font.GothamBold
+noclipToggleBtn.TextSize = 13
+noclipToggleBtn.Parent = moveTab
+
+local noclipToggleCorner = Instance.new("UICorner")
+noclipToggleCorner.CornerRadius = UDim.new(0, 6)
+noclipToggleCorner.Parent = noclipToggleBtn
+
+local function refreshNoclipToggleUI()
+    if noclipEnabled then
+        noclipToggleBtn.Text = "Noclip: ON"
+        noclipToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 70)
+    else
+        noclipToggleBtn.Text = "Noclip: OFF"
+        noclipToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+    end
+end
+
+noclipToggleBtn.MouseButton1Click:Connect(function()
+    toggleNoclip()
+    refreshNoclipToggleUI()
+end)
+
+local noclipKeybindLabel = Instance.new("TextLabel")
+noclipKeybindLabel.Size = UDim2.new(1, 0, 0, 14)
+noclipKeybindLabel.Position = UDim2.new(0, 0, 0, 210)
+noclipKeybindLabel.BackgroundTransparency = 1
+noclipKeybindLabel.Text = "Keybind Noclip:"
+noclipKeybindLabel.TextColor3 = Color3.fromRGB(200, 200, 255)
+noclipKeybindLabel.Font = Enum.Font.GothamBold
+noclipKeybindLabel.TextSize = 12
+noclipKeybindLabel.TextXAlignment = Enum.TextXAlignment.Left
+noclipKeybindLabel.Parent = moveTab
+
+local noclipKeybindBtn = Instance.new("TextButton")
+noclipKeybindBtn.Size = UDim2.new(1, 0, 0, 26)
+noclipKeybindBtn.Position = UDim2.new(0, 0, 0, 226)
+noclipKeybindBtn.BackgroundColor3 = Color3.fromRGB(70, 90, 160)
+noclipKeybindBtn.Text = "F2"
+noclipKeybindBtn.TextColor3 = Color3.new(1, 1, 1)
+noclipKeybindBtn.Font = Enum.Font.GothamBold
+noclipKeybindBtn.TextSize = 13
+noclipKeybindBtn.Parent = moveTab
+
+local noclipKeybindBtnCorner = Instance.new("UICorner")
+noclipKeybindBtnCorner.CornerRadius = UDim.new(0, 6)
+noclipKeybindBtnCorner.Parent = noclipKeybindBtn
+
+noclipKeybindBtn.MouseButton1Click:Connect(function()
+    if capturingNoclipKeybind then return end
+    capturingNoclipKeybind = true
+    noclipKeybindBtn.Text = "Tekan tombol..."
+    noclipKeybindBtn.BackgroundColor3 = Color3.fromRGB(160, 130, 40)
+end)
+
+-- =========================================================
+-- TAB: VISUAL (NoFog + FullBright)
+-- =========================================================
+local visualTab = tabFrames["Visual"]
+
+local visualToggleBtn = Instance.new("TextButton")
+visualToggleBtn.Size = UDim2.new(1, 0, 0, 30)
+visualToggleBtn.Position = UDim2.new(0, 0, 0, 0)
+visualToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+visualToggleBtn.Text = "NoFog + FullBright: OFF"
+visualToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+visualToggleBtn.Font = Enum.Font.GothamBold
+visualToggleBtn.TextSize = 13
+visualToggleBtn.Parent = visualTab
+
+local visualToggleCorner = Instance.new("UICorner")
+visualToggleCorner.CornerRadius = UDim.new(0, 6)
+visualToggleCorner.Parent = visualToggleBtn
+
+visualToggleBtn.MouseButton1Click:Connect(function()
+    visualEnabled = not visualEnabled
+    applyVisual()
+    if visualEnabled then
+        visualToggleBtn.Text = "NoFog + FullBright: ON"
+        visualToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 70)
+    else
+        visualToggleBtn.Text = "NoFog + FullBright: OFF"
+        visualToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+    end
+end)
+
+local visualInfo = Instance.new("TextLabel")
+visualInfo.Size = UDim2.new(1, 0, 0, 80)
+visualInfo.Position = UDim2.new(0, 0, 0, 40)
+visualInfo.BackgroundTransparency = 1
+visualInfo.Text = "Menghilangkan fog & bikin scene terang terus (siang terus, ambient tinggi, no shadow).\nToggle OFF buat balikin ke pengaturan asli game."
+visualInfo.TextColor3 = Color3.fromRGB(160, 160, 170)
+visualInfo.Font = Enum.Font.Gotham
+visualInfo.TextSize = 11
+visualInfo.TextWrapped = true
+visualInfo.TextXAlignment = Enum.TextXAlignment.Left
+visualInfo.TextYAlignment = Enum.TextYAlignment.Top
+visualInfo.Parent = visualTab
+
+-- =========================================================
+-- TAB: ESP (Trinket, Player, Monster)
+-- =========================================================
+local espTab = tabFrames["ESP"]
+
+local function createEspToggleRow(yPos, label, isOnFn, toggleFn)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 0, 30)
+    btn.Position = UDim2.new(0, 0, 0, yPos)
+    btn.BackgroundColor3 = isOnFn() and Color3.fromRGB(40, 160, 70) or Color3.fromRGB(180, 40, 40)
+    btn.Text = label .. ": " .. (isOnFn() and "ON" or "OFF")
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 13
+    btn.Parent = espTab
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = btn
+
+    btn.MouseButton1Click:Connect(function()
+        toggleFn()
+        local isOn = isOnFn()
+        btn.Text = label .. ": " .. (isOn and "ON" or "OFF")
+        btn.BackgroundColor3 = isOn and Color3.fromRGB(40, 160, 70) or Color3.fromRGB(180, 40, 40)
+    end)
+
+    return btn
+end
+
+createEspToggleRow(0, "Trinket ESP", function() return trinketEspEnabled end, toggleTrinketESP)
+createEspToggleRow(38, "Player ESP", function() return playerEspEnabled end, togglePlayerESP)
+createEspToggleRow(76, "Monster ESP", function() return monsterEspEnabled end, toggleMonsterESP)
+
+local espInfo = Instance.new("TextLabel")
+espInfo.Size = UDim2.new(1, 0, 0, 100)
+espInfo.Position = UDim2.new(0, 0, 0, 116)
+espInfo.BackgroundTransparency = 1
+espInfo.Text = "Trinket: workspace.TrinketSpawns (emas)\nPlayer: nametag + HP bar (hijau)\nMonster: workspace.Monsters, nametag + HP bar (merah)"
+espInfo.TextColor3 = Color3.fromRGB(160, 160, 170)
+espInfo.Font = Enum.Font.Gotham
+espInfo.TextSize = 11
+espInfo.TextWrapped = true
+espInfo.TextXAlignment = Enum.TextXAlignment.Left
+espInfo.TextYAlignment = Enum.TextYAlignment.Top
+espInfo.Parent = espTab
+
+----------------------------------------------------------------
+-- GLOBAL INPUT (keybind capture untuk WalkSpeed & Noclip)
+----------------------------------------------------------------
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if capturingWSKeybind then
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            walkspeedKeybind = input.KeyCode
+            wsKeybindBtn.Text = tostring(walkspeedKeybind.Name)
+            wsKeybindBtn.BackgroundColor3 = Color3.fromRGB(70, 90, 160)
+            capturingWSKeybind = false
+        end
+        return
+    end
+
+    if capturingNoclipKeybind then
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            noclipKeybind = input.KeyCode
+            noclipKeybindBtn.Text = tostring(noclipKeybind.Name)
+            noclipKeybindBtn.BackgroundColor3 = Color3.fromRGB(70, 90, 160)
+            capturingNoclipKeybind = false
+        end
+        return
+    end
+
+    if gameProcessed then return end
+
+    if input.UserInputType == Enum.UserInputType.Keyboard then
+        if input.KeyCode == walkspeedKeybind then
+            toggleWalkSpeed()
+        elseif input.KeyCode == noclipKeybind then
+            toggleNoclip()
+            refreshNoclipToggleUI()
+        end
+    end
+end)
+
+----------------------------------------------------------------
+-- DRAG LOGIC (whole window)
+----------------------------------------------------------------
+local dragging, dragInput, dragStart, startPos
+
+TitleBar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = MainFrame.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+TitleBar.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        local delta = input.Position - dragStart
+        MainFrame.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+print("[Universal] WalkSpeed + Noclip + Visual + ESP loaded.")
