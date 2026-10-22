@@ -1227,7 +1227,7 @@ local farmEnabled = false
 local farmMode = "Above"
 local farmOffsetX, farmOffsetY, farmOffsetZ = 0, 5, 5
 local farmDodgeEnabled = false
-local farmDodgeDistance = 3
+local farmDodgeDistance = 12
 local farmAttackActive = false
 local farmKeybind = Enum.KeyCode.F4
 local capturingFarmKeybind = false
@@ -1324,9 +1324,11 @@ local function computeFarmCFrame(targetRoot)
         offsetPos = targetCFrame.Position + Vector3.new(0, -math.abs(farmOffsetY), 0)
     elseif farmMode == "Behind" then
         -- Mode Behind hanya memakai sumbu Z sebagai jarak relatif arah hadap NPC.
-        local behindDist = math.max(math.abs(farmOffsetZ), MIN_BEHIND_DISTANCE)
-        local dodgeOffset = farmDodgeEnabled and not farmAttackActive and farmDodgeDistance or 0
-        local backOffset = targetCFrame.LookVector * -(behindDist + dodgeOffset)
+        local attackDistance = math.max(math.abs(farmOffsetZ), MIN_BEHIND_DISTANCE)
+        local dodgePosition = math.max(math.abs(farmDodgeDistance), MIN_BEHIND_DISTANCE)
+        local desiredDistance = farmDodgeEnabled and not farmAttackActive
+            and dodgePosition or attackDistance
+        local backOffset = targetCFrame.LookVector * -desiredDistance
         offsetPos = targetCFrame.Position + backOffset
     else
         offsetPos = targetCFrame.Position
@@ -7534,10 +7536,10 @@ farmRight:Slider({
     Callback = function(value) farmSwingDuration = value end,
 }, "FarmSwingDuration")
 farmRight:Slider({
-    Name = "Dodge distance",
+    Name = "Dodge position distance (Z)",
     Default = farmDodgeDistance,
     Minimum = 0,
-    Maximum = 15,
+    Maximum = FARM_MAX_XZ,
     Precision = 0,
     Callback = function(value) farmDodgeDistance = value end,
 }, "FarmDodgeDistance")
