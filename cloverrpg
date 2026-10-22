@@ -1226,6 +1226,9 @@ end -- ESP local scope
 local farmEnabled = false
 local farmMode = "Above"
 local farmOffsetX, farmOffsetY, farmOffsetZ = 0, 5, 5
+local farmDodgeEnabled = false
+local farmDodgeDistance = 3
+local farmAttackActive = false
 local farmKeybind = Enum.KeyCode.F4
 local capturingFarmKeybind = false
 local FARM_DETECT_RANGE = 70
@@ -1254,12 +1257,19 @@ task.spawn(function()
             local system = byteNet and byteNet:FindFirstChild("system")
             local remote = system and system:FindFirstChild("ByteNetReliable")
             if remote and remote:IsA("RemoteEvent") then
+                farmAttackActive = true
                 pcall(function()
                     remote:FireServer(buffer.fromstring("\003\v\000LightAttack\000"))
                 end)
+                task.wait(0.1)
+                farmAttackActive = false
+                task.wait(FARM_ATTACK_INTERVAL - 0.1)
+            else
+                farmAttackActive = false
+                task.wait(0.1)
             end
-            task.wait(FARM_ATTACK_INTERVAL)
         else
+            farmAttackActive = false
             task.wait(0.1)
         end
     end
@@ -1304,7 +1314,8 @@ local function computeFarmCFrame(targetRoot)
     elseif farmMode == "Behind" then
         -- Mode Behind hanya memakai sumbu Z sebagai jarak relatif arah hadap NPC.
         local behindDist = math.max(math.abs(farmOffsetZ), MIN_BEHIND_DISTANCE)
-        local backOffset = targetCFrame.LookVector * -behindDist
+        local dodgeOffset = farmDodgeEnabled and not farmAttackActive and farmDodgeDistance or 0
+        local backOffset = targetCFrame.LookVector * -(behindDist + dodgeOffset)
         offsetPos = targetCFrame.Position + backOffset
     else
         offsetPos = targetCFrame.Position
@@ -1332,8 +1343,8 @@ task.spawn(function()
             if targetRoot then
                 local destination = computeFarmCFrame(targetRoot)
                 local distance = (rootPart.Position - destination.Position).Magnitude
-                if distance > 2 then
-                    local duration = math.clamp(distance / 100, 0.12, 0.5)
+                if distance > 0.5 then
+                    local duration = math.clamp(distance / 100, 0.05, 0.5)
                     local tween = TweenService:Create(
                         rootPart,
                         TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
@@ -1349,7 +1360,7 @@ task.spawn(function()
                 end
             end
         end
-        task.wait(0.15)
+        task.wait(0.03)
     end
 end)
 
@@ -1412,6 +1423,7 @@ local function toggleFarm()
             farmTween = nil
         end
         currentFarmTarget = nil
+        farmAttackActive = false
         humanoid:SetStateEnabled(Enum.HumanoidStateType.Freefall, true)
     end
 end
@@ -7497,6 +7509,19 @@ farmRight:Slider({
     Name = "Behind distance (Z)", Default = farmOffsetZ, Minimum = FARM_MIN_XZ, Maximum = FARM_MAX_XZ, Precision = 0,
     Callback = function(value) farmOffsetZ = value end,
 }, "FarmOffsetZ")
+farmRight:Toggle({
+    Name = "Dodge Attack",
+    Default = farmDodgeEnabled,
+    Callback = function(value) farmDodgeEnabled = value == true end,
+}, "FarmDodgeToggle")
+farmRight:Slider({
+    Name = "Dodge distance",
+    Default = farmDodgeDistance,
+    Minimum = 0,
+    Maximum = 15,
+    Precision = 0,
+    Callback = function(value) farmDodgeDistance = value end,
+}, "FarmDodgeDistance")
 
 visualLeft:Header({ Name = "Visuals" })
 visualLeft:Toggle({
