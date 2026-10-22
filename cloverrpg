@@ -1248,6 +1248,8 @@ end
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local FARM_ATTACK_INTERVAL = 0.25
+local FARM_DODGE_PAUSE = 0.15
+local farmSwingDuration = 0.35
 
 task.spawn(function()
     while true do
@@ -1257,13 +1259,24 @@ task.spawn(function()
             local system = byteNet and byteNet:FindFirstChild("system")
             local remote = system and system:FindFirstChild("ByteNetReliable")
             if remote and remote:IsA("RemoteEvent") then
-                farmAttackActive = true
+                local shouldDodge = farmDodgeEnabled and farmMode == "Behind"
+                farmAttackActive = shouldDodge
+
+                -- Beri waktu untuk mendekat ke jarak serang sebelum swing dikirim.
+                if shouldDodge then task.wait(0.1) end
                 pcall(function()
                     remote:FireServer(buffer.fromstring("\003\v\000LightAttack\000"))
                 end)
-                task.wait(0.1)
-                farmAttackActive = false
-                task.wait(FARM_ATTACK_INTERVAL - 0.1)
+
+                if shouldDodge then
+                    -- Tahan jarak serang selama swing, lalu mundur sebelum serangan berikutnya.
+                    task.wait(farmSwingDuration)
+                    farmAttackActive = false
+                    task.wait(FARM_DODGE_PAUSE)
+                else
+                    farmAttackActive = false
+                    task.wait(FARM_ATTACK_INTERVAL)
+                end
             else
                 farmAttackActive = false
                 task.wait(0.1)
@@ -7514,6 +7527,14 @@ farmRight:Toggle({
     Default = farmDodgeEnabled,
     Callback = function(value) farmDodgeEnabled = value == true end,
 }, "FarmDodgeToggle")
+farmRight:Slider({
+    Name = "Swing hold time (s)",
+    Default = farmSwingDuration,
+    Minimum = 0.1,
+    Maximum = 0.8,
+    Precision = 2,
+    Callback = function(value) farmSwingDuration = value end,
+}, "FarmSwingDuration")
 farmRight:Slider({
     Name = "Dodge distance",
     Default = farmDodgeDistance,
