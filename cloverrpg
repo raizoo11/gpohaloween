@@ -1231,6 +1231,7 @@ local capturingFarmKeybind = false
 local FARM_DETECT_RANGE = 70
 
 local currentFarmTarget = nil
+local farmTargetY = nil
 local farmTween = nil
 
 local function isValidFarmTarget(model)
@@ -1290,7 +1291,14 @@ local function computeFarmCFrame(targetRoot)
     local offsetPos
 
     if farmMode == "Above" then
-        offsetPos = targetCFrame.Position + Vector3.new(farmOffsetX, math.abs(farmOffsetY), farmOffsetZ)
+        -- Kunci tinggi saat target dipilih agar gerakan vertikal kecil NPC
+        -- tidak membuat karakter naik-turun saat farm.
+        local stableY = farmTargetY or targetCFrame.Position.Y
+        offsetPos = Vector3.new(
+            targetCFrame.Position.X + farmOffsetX,
+            stableY + math.abs(farmOffsetY),
+            targetCFrame.Position.Z + farmOffsetZ
+        )
     elseif farmMode == "Bottom" then
         offsetPos = targetCFrame.Position + Vector3.new(farmOffsetX, -math.abs(farmOffsetY), farmOffsetZ)
     elseif farmMode == "Behind" then
@@ -1310,6 +1318,8 @@ local function setFarmTarget(target)
         farmTween = nil
     end
     currentFarmTarget = target
+    local targetRoot = target and target:FindFirstChild("HumanoidRootPart")
+    farmTargetY = targetRoot and targetRoot.Position.Y or nil
 end
 
 -- Retween ke posisi terbaru secara berkala, tanpa membuat tween setiap frame.
