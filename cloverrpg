@@ -1262,8 +1262,6 @@ task.spawn(function()
                 local shouldDodge = farmDodgeEnabled and farmMode == "Behind"
                 farmAttackActive = shouldDodge
 
-                -- Beri waktu untuk mendekat ke jarak serang sebelum swing dikirim.
-                if shouldDodge then task.wait(0.1) end
                 pcall(function()
                     remote:FireServer(buffer.fromstring("\003\v\000LightAttack\000"))
                 end)
