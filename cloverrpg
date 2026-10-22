@@ -1364,6 +1364,23 @@ RunService.Heartbeat:Connect(function()
     if humanoid:GetState() == Enum.HumanoidStateType.Freefall then
         humanoid:ChangeState(Enum.HumanoidStateType.Running)
     end
+
+    -- Tahan posisi vertikal di atas target; gravitasi tetap bekerja setelah tween selesai.
+    if farmMode == "Above" and isValidFarmTarget(currentFarmTarget) then
+        local targetRoot = currentFarmTarget:FindFirstChild("HumanoidRootPart")
+        if targetRoot then
+            local desiredY = computeFarmCFrame(targetRoot).Position.Y
+            local velocity = rootPart.AssemblyLinearVelocity
+            if math.abs(rootPart.Position.Y - desiredY) > 0.05 or math.abs(velocity.Y) > 0.05 then
+                rootPart.AssemblyLinearVelocity = Vector3.new(velocity.X, 0, velocity.Z)
+                rootPart.CFrame = CFrame.new(
+                    rootPart.Position.X,
+                    desiredY,
+                    rootPart.Position.Z
+                ) * rootPart.CFrame.Rotation
+            end
+        end
+    end
 end)
 
 task.spawn(function()
