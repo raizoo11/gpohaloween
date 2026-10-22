@@ -1291,22 +1291,23 @@ local function computeFarmCFrame(targetRoot)
     local offsetPos
 
     if farmMode == "Above" then
-        -- Kunci tinggi saat target dipilih agar gerakan vertikal kecil NPC
-        -- tidak membuat karakter naik-turun saat farm.
+        -- Mode Above hanya memakai sumbu Y; tinggi target dikunci saat dipilih.
         local stableY = farmTargetY or targetCFrame.Position.Y
         offsetPos = Vector3.new(
-            targetCFrame.Position.X + farmOffsetX,
+            targetCFrame.Position.X,
             stableY + math.abs(farmOffsetY),
-            targetCFrame.Position.Z + farmOffsetZ
+            targetCFrame.Position.Z
         )
     elseif farmMode == "Bottom" then
-        offsetPos = targetCFrame.Position + Vector3.new(farmOffsetX, -math.abs(farmOffsetY), farmOffsetZ)
+        -- Mode Bottom hanya memakai sumbu Y.
+        offsetPos = targetCFrame.Position + Vector3.new(0, -math.abs(farmOffsetY), 0)
     elseif farmMode == "Behind" then
+        -- Mode Behind hanya memakai sumbu Z sebagai jarak relatif arah hadap NPC.
         local behindDist = math.max(math.abs(farmOffsetZ), MIN_BEHIND_DISTANCE)
         local backOffset = targetCFrame.LookVector * -behindDist
-        offsetPos = targetCFrame.Position + backOffset + Vector3.new(farmOffsetX, farmOffsetY, 0)
+        offsetPos = targetCFrame.Position + backOffset
     else
-        offsetPos = targetCFrame.Position + Vector3.new(farmOffsetX, farmOffsetY, farmOffsetZ)
+        offsetPos = targetCFrame.Position
     end
 
     return CFrame.new(offsetPos, targetCFrame.Position)
@@ -7484,16 +7485,16 @@ local FARM_MIN_XZ, FARM_MAX_XZ = -50, 50
 local FARM_MIN_Y, FARM_MAX_Y = 0, 50
 
 farmRight:Header({ Name = "Target offsets" })
+farmRight:Paragraph({
+    Header = "Sumbu offset",
+    Body = "Above/Bottom: atur Y saja. Behind: atur Z saja sebagai jarak ke belakang NPC.",
+})
 farmRight:Slider({
-    Name = "X offset", Default = farmOffsetX, Minimum = FARM_MIN_XZ, Maximum = FARM_MAX_XZ, Precision = 0,
-    Callback = function(value) farmOffsetX = value end,
-}, "FarmOffsetX")
-farmRight:Slider({
-    Name = "Y offset", Default = farmOffsetY, Minimum = FARM_MIN_Y, Maximum = FARM_MAX_Y, Precision = 0,
+    Name = "Above/Bottom height (Y)", Default = farmOffsetY, Minimum = FARM_MIN_Y, Maximum = FARM_MAX_Y, Precision = 0,
     Callback = function(value) farmOffsetY = value end,
 }, "FarmOffsetY")
 farmRight:Slider({
-    Name = "Z offset", Default = farmOffsetZ, Minimum = FARM_MIN_XZ, Maximum = FARM_MAX_XZ, Precision = 0,
+    Name = "Behind distance (Z)", Default = farmOffsetZ, Minimum = FARM_MIN_XZ, Maximum = FARM_MAX_XZ, Precision = 0,
     Callback = function(value) farmOffsetZ = value end,
 }, "FarmOffsetZ")
 
