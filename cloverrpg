@@ -1886,7 +1886,11 @@ task.spawn(function()
                     end
                 end
 
+                -- Tunggu sebentar setelah tiba agar posisi interaksi stabil.
+                task.wait(1)
+
                 if autoGatherSettings.enabled and not farmEnabled and not flyEnabled
+                    and not isGatherMinigameActive()
                     and resource.Parent and part.Parent then
                     lastGatherAttempt[resource] = os.clock()
                     pcall(pressGatherKey, resource)
