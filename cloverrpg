@@ -1688,10 +1688,36 @@ local function getNearestAutoGatherTarget()
     return nearest, nearestPart
 end
 
-local function pressGatherKey()
-    autoGatherInput:SendKeyEvent(true, Enum.KeyCode.E, false, game)
-    task.wait(0.06)
-    autoGatherInput:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+local function pressGatherKey(resource)
+    local prompt = resource and resource:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt and prompt.Enabled then
+        if typeof(fireproximityprompt) == "function" then
+            local ok = pcall(fireproximityprompt, prompt)
+            if ok then return true end
+        end
+
+        local began = pcall(function()
+            game:GetService("ProximityPromptService"):InputHoldBegin(prompt)
+        end)
+        if began then
+            task.wait(math.clamp(prompt.HoldDuration, 0.1, 2))
+            pcall(function()
+                game:GetService("ProximityPromptService"):InputHoldEnd(prompt)
+            end)
+            return true
+        end
+    end
+
+    -- Fallback untuk interaksi yang membaca input E langsung.
+    local keyDown = pcall(function()
+        autoGatherInput:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+    end)
+    if not keyDown then return false end
+    task.wait(0.25)
+    pcall(function()
+        autoGatherInput:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+    end)
+    return true
 end
 
 local function setAutoGatherEnabled(enabled)
@@ -1742,7 +1768,7 @@ task.spawn(function()
                 if autoGatherSettings.enabled and not farmEnabled and not flyEnabled
                     and resource.Parent and part.Parent then
                     lastGatherAttempt[resource] = os.clock()
-                    pcall(pressGatherKey)
+                    pcall(pressGatherKey, resource)
                     task.wait(0.2)
                 end
             else
