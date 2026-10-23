@@ -1648,6 +1648,7 @@ local autoGatherSettings = {
 }
 local autoGatherTween = nil
 local lastGatherAttempt = setmetatable({}, { __mode = "k" })
+local isGatherMinigameActive
 
 local gatherMovementKeyCodes = {
     W = Enum.KeyCode.W, A = Enum.KeyCode.A,
@@ -1786,7 +1787,7 @@ local function pressGatherKey(resource)
     return true
 end
 
-local function isGatherMinigameActive()
+isGatherMinigameActive = function()
     local harvestGui = gatherPlayerGui:FindFirstChild("HarvestRings")
     if harvestGui and harvestGui:IsA("ScreenGui") and harvestGui.Enabled then
         local holder = harvestGui:FindFirstChild("Holder")
@@ -8017,7 +8018,7 @@ gatherLeft:Toggle({
 }, "AutoGatherCrops")
 gatherLeft:Paragraph({
     Header = "Interaction",
-    Body = "Pilih resource terdekat dalam radius, tween ke jarak interaksi, lalu tekan E. Auto Gather berhenti sementara saat Farm atau Fly aktif.",
+    Body = "Pilih resource terdekat dalam radius, bergerak dengan mode pilihan, lalu tekan E. Pergerakan berhenti selama minigame, Farm, atau Fly aktif.",
 })
 
 gatherLeft:Header({ Name = "Auto Harvest" })
