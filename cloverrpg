@@ -7680,6 +7680,9 @@ function MacLib:Demo()
 
 	Window.onUnloaded(function()
         if gatherConnection then gatherConnection:Disconnect() end
+        if autoGatherMinigameWatcher then autoGatherMinigameWatcher:Disconnect() end
+        autoGatherSettings.enabled = false
+        if autoGatherTween then autoGatherTween:Cancel() end
 		print("Unloaded!")
 	end)
 
