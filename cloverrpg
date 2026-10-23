@@ -1895,6 +1895,71 @@ task.spawn(function()
     end
 end)
 
+
+----------------------------------------------------------------
+-- CUSTOM CURSOR
+----------------------------------------------------------------
+local customCursorEnabled = false
+local originalMouseIconEnabled = UserInputService.MouseIconEnabled
+local customCursorConnection = nil
+local customCursorGui = Instance.new("ScreenGui")
+customCursorGui.Name = "CloverCustomCursor"
+customCursorGui.IgnoreGuiInset = true
+customCursorGui.ResetOnSpawn = false
+customCursorGui.DisplayOrder = 2147483646
+customCursorGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+local cursorParent = (gethui and gethui()) or CoreGui
+local oldCursorGui = cursorParent:FindFirstChild("CloverCustomCursor")
+if oldCursorGui then oldCursorGui:Destroy() end
+customCursorGui.Parent = cursorParent
+
+local cursorMark = Instance.new("Frame")
+cursorMark.Name = "Crosshair"
+cursorMark.Size = UDim2.fromOffset(22, 22)
+cursorMark.AnchorPoint = Vector2.new(0.5, 0.5)
+cursorMark.BackgroundTransparency = 1
+cursorMark.Visible = false
+cursorMark.Parent = customCursorGui
+
+local function addCursorPart(name, size, position)
+    local part = Instance.new("Frame")
+    part.Name = name
+    part.Size = size
+    part.Position = position
+    part.BackgroundColor3 = Color3.fromRGB(0, 255, 220)
+    part.BorderSizePixel = 0
+    part.ZIndex = 2
+    part.Parent = cursorMark
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(15, 20, 25)
+    stroke.Thickness = 1
+    stroke.Parent = part
+end
+
+addCursorPart("Top", UDim2.fromOffset(2, 6), UDim2.fromOffset(10, 0))
+addCursorPart("Bottom", UDim2.fromOffset(2, 6), UDim2.fromOffset(10, 16))
+addCursorPart("Left", UDim2.fromOffset(6, 2), UDim2.fromOffset(0, 10))
+addCursorPart("Right", UDim2.fromOffset(6, 2), UDim2.fromOffset(16, 10))
+addCursorPart("Center", UDim2.fromOffset(4, 4), UDim2.fromOffset(9, 9))
+
+local function setCustomCursorEnabled(enabled)
+    customCursorEnabled = enabled == true
+    cursorMark.Visible = customCursorEnabled
+    UserInputService.MouseIconEnabled = customCursorEnabled and false or originalMouseIconEnabled
+
+    if customCursorConnection then
+        customCursorConnection:Disconnect()
+        customCursorConnection = nil
+    end
+    if customCursorEnabled then
+        customCursorConnection = RunService.RenderStepped:Connect(function()
+            local mousePosition = UserInputService:GetMouseLocation()
+            cursorMark.Position = UDim2.fromOffset(mousePosition.X, mousePosition.Y)
+        end)
+    end
+end
+
 local function loadMacLib()
 local MacLib = { 
 	Options = {}, 
@@ -7773,6 +7838,9 @@ function MacLib:Demo()
         setGatherMovementKeys()
         autoGatherSettings.enabled = false
         if autoGatherTween then autoGatherTween:Cancel() end
+        setCustomCursorEnabled(false)
+        if customCursorConnection then customCursorConnection:Disconnect() end
+        if customCursorGui then customCursorGui:Destroy() end
 		print("Unloaded!")
 	end)
 
@@ -8059,6 +8127,11 @@ visualLeft:Toggle({
     Default = visualEnabled,
     Callback = setVisualState,
 }, "VisualToggle")
+visualLeft:Toggle({
+    Name = "Custom Cursor",
+    Default = customCursorEnabled,
+    Callback = setCustomCursorEnabled,
+}, "CustomCursorToggle")
 visualLeft:Paragraph({
     Header = "Lighting",
     Body = "Hilangkan fog dan atmosphere, lalu tingkatkan pencahayaan. Matikan untuk memulihkan pengaturan awal.",
