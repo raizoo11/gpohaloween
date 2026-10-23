@@ -1795,7 +1795,9 @@ isGatherMinigameActive = function()
     end
 
     local miningGui = gatherPlayerGui:FindFirstChild("HarvestTiming")
-    if miningGui and gatherIsShown(miningGui) then
+    if miningGui and activeMiningSpinner and activeMiningSpinner.Parent
+        and activeMiningSpinner:IsDescendantOf(miningGui)
+        and gatherIsShown(activeMiningSpinner) then
         return true
     end
     return false
