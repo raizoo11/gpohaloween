@@ -1642,6 +1642,7 @@ local autoGatherInput = game:GetService("VirtualInputManager")
 local autoGatherSettings = {
     enabled = false,
     targetMode = "Nearest Ore/Gather",
+    targetName = "Any",
     radius = 70,
     mode = "Tween",
 }
@@ -1760,24 +1761,56 @@ local function getAutoGatherPart(resource)
     return resource:FindFirstChildWhichIsA("BasePart", true)
 end
 
+local function getAutoGatherNameOptions()
+    local ores, crops = getAutoGatherFolders()
+    local options = { "Any" }
+    local seen = { Any = true }
+
+    local function addResources(folder, prefix)
+        if not folder then return end
+        for _, resource in ipairs(folder:GetChildren()) do
+            local option = prefix .. resource.Name
+            if not seen[option] then
+                seen[option] = true
+                options[#options + 1] = option
+            end
+        end
+    end
+
+    addResources(ores, "Ore: ")
+    addResources(crops, "Gather: ")
+    table.sort(options, function(a, b)
+        return string.lower(a) < string.lower(b)
+    end)
+    return options
+end
+
 local function getNearestAutoGatherTarget()
     if not rootPart or not rootPart.Parent then return nil end
     local ores, crops = getAutoGatherFolders()
     local candidates = {}
-    if autoGatherSettings.targetMode == "Nearest Ore" then
-        if ores then candidates[#candidates + 1] = ores end
+    local selectedName = autoGatherSettings.targetName
+
+    -- Pilihan nama spesifik berdiri sendiri; mode kategori hanya membatasi pilihan "Any".
+    if selectedName ~= "Any" then
+        if ores then candidates[#candidates + 1] = { folder = ores, prefix = "Ore: " } end
+        if crops then candidates[#candidates + 1] = { folder = crops, prefix = "Gather: " } end
+    elseif autoGatherSettings.targetMode == "Nearest Ore" then
+        if ores then candidates[#candidates + 1] = { folder = ores, prefix = "Ore: " } end
     elseif autoGatherSettings.targetMode == "Nearest Gather" then
-        if crops then candidates[#candidates + 1] = crops end
+        if crops then candidates[#candidates + 1] = { folder = crops, prefix = "Gather: " } end
     else
-        if ores then candidates[#candidates + 1] = ores end
-        if crops then candidates[#candidates + 1] = crops end
+        if ores then candidates[#candidates + 1] = { folder = ores, prefix = "Ore: " } end
+        if crops then candidates[#candidates + 1] = { folder = crops, prefix = "Gather: " } end
     end
 
     local nearest, nearestPart, nearestDistance
     local now = os.clock()
-    for _, folder in ipairs(candidates) do
-        for _, resource in ipairs(folder:GetChildren()) do
-            local part = getAutoGatherPart(resource)
+    for _, candidate in ipairs(candidates) do
+        for _, resource in ipairs(candidate.folder:GetChildren()) do
+            local matchesName = selectedName == "Any"
+                or selectedName == candidate.prefix .. resource.Name
+            local part = matchesName and getAutoGatherPart(resource)
             local attemptedAt = lastGatherAttempt[resource] or 0
             if part and part:IsDescendantOf(workspace)
                 and not isAutoGatherResourceDepleted(resource)
@@ -8154,9 +8187,36 @@ gatherLeft:Dropdown({
         if value then autoGatherSettings.targetMode = value end
     end,
 }, "AutoGatherTarget")
+
+local resourceNameDropdown = gatherLeft:Dropdown({
+    Name = "Ore / Gather name",
+    Options = getAutoGatherNameOptions(),
+    Default = 1,
+    Required = true,
+    Callback = function(value)
+        if value then autoGatherSettings.targetName = value end
+    end,
+}, "AutoGatherResourceName")
+
+local function refreshAutoGatherResourceList()
+    local selectedName = autoGatherSettings.targetName
+    resourceNameDropdown:ClearOptions()
+    resourceNameDropdown:InsertOptions(getAutoGatherNameOptions())
+    if resourceNameDropdown:IsOption(selectedName) then
+        resourceNameDropdown:UpdateSelection(selectedName)
+    else
+        resourceNameDropdown:UpdateSelection("Any")
+    end
+end
+
+gatherLeft:Button({
+    Name = "Refresh resource list",
+    Callback = refreshAutoGatherResourceList,
+}, "AutoGatherRefreshResources")
+
 gatherLeft:Paragraph({
     Header = "Interaction",
-    Body = "Pilih resource terdekat dalam radius, bergerak dengan mode pilihan, lalu tekan E. Pergerakan berhenti selama minigame, Farm, atau Fly aktif.",
+    Body = "Pilih kategori terdekat atau nama ore/gather tertentu. Tekan Refresh resource list setelah daftar resource di map berubah. Resource dengan health 0 dilewati.",
 })
 
 gatherLeft:Header({ Name = "Auto Harvest" })
