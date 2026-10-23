@@ -1720,6 +1720,20 @@ local function pressGatherKey(resource)
     return true
 end
 
+local function isGatherMinigameActive()
+    local harvestGui = gatherPlayerGui:FindFirstChild("HarvestRings")
+    if harvestGui and harvestGui:IsA("ScreenGui") and harvestGui.Enabled then
+        local holder = harvestGui:FindFirstChild("Holder")
+        if not holder or holder.Visible then return true end
+    end
+
+    local miningGui = gatherPlayerGui:FindFirstChild("HarvestTiming")
+    if miningGui and gatherIsShown(miningGui) then
+        return true
+    end
+    return false
+end
+
 local function setAutoGatherEnabled(enabled)
     autoGatherSettings.enabled = enabled == true
     if not autoGatherSettings.enabled and autoGatherTween then
@@ -1728,10 +1742,18 @@ local function setAutoGatherEnabled(enabled)
     end
 end
 
+-- Batalkan gerakan seketika ketika minigame muncul.
+local autoGatherMinigameWatcher = RunService.RenderStepped:Connect(function()
+    if autoGatherSettings.enabled and isGatherMinigameActive() and autoGatherTween then
+        autoGatherTween:Cancel()
+        autoGatherTween = nil
+    end
+end)
+
 task.spawn(function()
     while true do
         if autoGatherSettings.enabled and not farmEnabled and not flyEnabled
-            and rootPart and rootPart.Parent then
+            and not isGatherMinigameActive() and rootPart and rootPart.Parent then
             local resource, part = getNearestAutoGatherTarget()
             if resource and part then
                 local away = rootPart.Position - part.Position
@@ -1775,6 +1797,10 @@ task.spawn(function()
                 task.wait(0.25)
             end
         else
+            if autoGatherTween then
+                autoGatherTween:Cancel()
+                autoGatherTween = nil
+            end
             task.wait(0.2)
         end
     end
