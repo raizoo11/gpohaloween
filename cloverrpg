@@ -1690,7 +1690,10 @@ local function isAutoGatherResourceDepleted(resource)
     if healthFill:IsA("GuiObject") then
         local size = healthFill.Size
         if size.X.Scale <= 0 and size.X.Offset <= 0 then return true end
-        if healthFill.AbsoluteSize.X <= 0.5 then return true end
+        if bar and bar:IsA("GuiObject") and bar.AbsoluteSize.X > 0.5
+            and healthFill.AbsoluteSize.X <= 0.5 then
+            return true
+        end
     end
     return false
 end
