@@ -1791,7 +1791,16 @@ isGatherMinigameActive = function()
     local harvestGui = gatherPlayerGui:FindFirstChild("HarvestRings")
     if harvestGui and harvestGui:IsA("ScreenGui") and harvestGui.Enabled then
         local holder = harvestGui:FindFirstChild("Holder")
-        if not holder or holder.Visible then return true end
+        local arena = holder and holder.Visible and holder:FindFirstChild("Arena")
+        local playerMarker = arena and arena:FindFirstChild("Player")
+        local rings = arena and arena:FindFirstChild("Rings")
+        if playerMarker and rings then
+            for _, ring in ipairs(rings:GetChildren()) do
+                if ring.Name == "ClosingRing" and ring:IsA("GuiObject") and ring.Visible then
+                    return true
+                end
+            end
+        end
     end
 
     local miningGui = gatherPlayerGui:FindFirstChild("HarvestTiming")
