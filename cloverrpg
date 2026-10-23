@@ -1647,6 +1647,7 @@ local autoGatherSettings = {
     mode = "Tween",
 }
 local autoGatherTween = nil
+local currentAutoGatherTarget = nil
 local lastGatherAttempt = setmetatable({}, { __mode = "k" })
 local isGatherMinigameActive
 
@@ -1668,12 +1669,39 @@ local function setGatherMovementKeys(desiredKeys)
     end
 end
 
+local function isAutoGatherResourceDepleted(resource)
+    local root = resource:FindFirstChild("Root", true)
+    local healthFolder = root and root:FindFirstChild("Health")
+    local bar = healthFolder and healthFolder:FindFirstChild("Bar")
+    local healthFill = bar and bar:FindFirstChild("Health")
+    if not healthFill then return false end
+
+    if healthFill:IsA("NumberValue") or healthFill:IsA("IntValue") then
+        return healthFill.Value <= 0
+    end
+    if healthFill:IsA("StringValue") then
+        local numericHealth = tonumber(healthFill.Value)
+        return numericHealth ~= nil and numericHealth <= 0
+    end
+    if healthFill:IsA("TextLabel") or healthFill:IsA("TextButton") then
+        local displayedHealth = tonumber(string.match(healthFill.Text, "%d+"))
+        if displayedHealth ~= nil then return displayedHealth <= 0 end
+    end
+    if healthFill:IsA("GuiObject") then
+        local size = healthFill.Size
+        if size.X.Scale <= 0 and size.X.Offset <= 0 then return true end
+        if healthFill.AbsoluteSize.X <= 0.5 then return true end
+    end
+    return false
+end
+
 local function walkToGatherTarget(resource, part, destination)
     local startedAt = os.clock()
     local initialDistance = (rootPart.Position - destination).Magnitude
     local timeout = math.clamp(initialDistance / 8 + 3, 4, 25)
 
     while resource.Parent and part.Parent
+        and not isAutoGatherResourceDepleted(resource)
         and autoGatherSettings.enabled
         and autoGatherSettings.mode == "Walk (WASD)"
         and not farmEnabled and not flyEnabled
@@ -1743,7 +1771,9 @@ local function getNearestAutoGatherTarget()
         for _, resource in ipairs(folder:GetChildren()) do
             local part = getAutoGatherPart(resource)
             local attemptedAt = lastGatherAttempt[resource] or 0
-            if part and part:IsDescendantOf(workspace) and now - attemptedAt >= 2 then
+            if part and part:IsDescendantOf(workspace)
+                and not isAutoGatherResourceDepleted(resource)
+                and now - attemptedAt >= 2 then
                 local distance = (part.Position - rootPart.Position).Magnitude
                 if distance <= autoGatherSettings.radius
                     and (not nearestDistance or distance < nearestDistance) then
@@ -1815,6 +1845,7 @@ end
 local function setAutoGatherEnabled(enabled)
     autoGatherSettings.enabled = enabled == true
     if not autoGatherSettings.enabled then
+        currentAutoGatherTarget = nil
         setGatherMovementKeys()
         if autoGatherTween then
             autoGatherTween:Cancel()
@@ -1835,6 +1866,14 @@ end
 
 -- Batalkan gerakan seketika ketika minigame muncul.
 local autoGatherMinigameWatcher = RunService.RenderStepped:Connect(function()
+    if currentAutoGatherTarget and isAutoGatherResourceDepleted(currentAutoGatherTarget) then
+        currentAutoGatherTarget = nil
+        if autoGatherTween then
+            autoGatherTween:Cancel()
+            autoGatherTween = nil
+        end
+        setGatherMovementKeys()
+    end
     if autoGatherSettings.enabled and isGatherMinigameActive() then
         setGatherMovementKeys()
         if autoGatherTween then
@@ -1850,6 +1889,7 @@ task.spawn(function()
             and not isGatherMinigameActive() and rootPart and rootPart.Parent then
             local resource, part = getNearestAutoGatherTarget()
             if resource and part then
+                currentAutoGatherTarget = resource
                 local away = rootPart.Position - part.Position
                 local horizontalAway = Vector3.new(away.X, 0, away.Z)
                 if horizontalAway.Magnitude < 0.01 then
@@ -1866,6 +1906,7 @@ task.spawn(function()
 
                 if autoGatherSettings.mode == "Walk (WASD)" then
                     if not walkToGatherTarget(resource, part, approachPosition) then
+                        currentAutoGatherTarget = nil
                         task.wait(0.1)
                         continue
                     end
@@ -1891,12 +1932,15 @@ task.spawn(function()
 
                 if autoGatherSettings.enabled and not farmEnabled and not flyEnabled
                     and not isGatherMinigameActive()
+                    and not isAutoGatherResourceDepleted(resource)
                     and resource.Parent and part.Parent then
                     lastGatherAttempt[resource] = os.clock()
                     pcall(pressGatherKey, resource)
                     task.wait(0.2)
                 end
+                currentAutoGatherTarget = nil
             else
+                currentAutoGatherTarget = nil
                 task.wait(0.25)
             end
         else
