@@ -1634,6 +1634,126 @@ local gatherConnection = RunService.RenderStepped:Connect(function(deltaTime)
     pcall(runAutoMining, deltaTime)
 end)
 
+
+----------------------------------------------------------------
+-- AUTO GATHER (Ores / Crops)
+----------------------------------------------------------------
+local autoGatherInput = game:GetService("VirtualInputManager")
+local autoGatherSettings = {
+    enabled = false,
+    ores = true,
+    crops = true,
+    radius = 70,
+}
+local autoGatherTween = nil
+local lastGatherAttempt = setmetatable({}, { __mode = "k" })
+
+local function getAutoGatherFolders()
+    local mapFolder = workspace:FindFirstChild("Map")
+    local harvestable = mapFolder and mapFolder:FindFirstChild("Harvestable")
+    return harvestable and harvestable:FindFirstChild("Ores"),
+        harvestable and harvestable:FindFirstChild("Crops")
+end
+
+local function getAutoGatherPart(resource)
+    if resource:IsA("BasePart") then return resource end
+    if resource:IsA("Model") then
+        return resource.PrimaryPart or resource:FindFirstChildWhichIsA("BasePart", true)
+    end
+    return resource:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function getNearestAutoGatherTarget()
+    if not rootPart or not rootPart.Parent then return nil end
+    local ores, crops = getAutoGatherFolders()
+    local candidates = {}
+    if autoGatherSettings.ores and ores then candidates[#candidates + 1] = ores end
+    if autoGatherSettings.crops and crops then candidates[#candidates + 1] = crops end
+
+    local nearest, nearestPart, nearestDistance
+    local now = os.clock()
+    for _, folder in ipairs(candidates) do
+        for _, resource in ipairs(folder:GetChildren()) do
+            local part = getAutoGatherPart(resource)
+            local attemptedAt = lastGatherAttempt[resource] or 0
+            if part and part:IsDescendantOf(workspace) and now - attemptedAt >= 2 then
+                local distance = (part.Position - rootPart.Position).Magnitude
+                if distance <= autoGatherSettings.radius
+                    and (not nearestDistance or distance < nearestDistance) then
+                    nearest, nearestPart, nearestDistance = resource, part, distance
+                end
+            end
+        end
+    end
+    return nearest, nearestPart
+end
+
+local function pressGatherKey()
+    autoGatherInput:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+    task.wait(0.06)
+    autoGatherInput:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+end
+
+local function setAutoGatherEnabled(enabled)
+    autoGatherSettings.enabled = enabled == true
+    if not autoGatherSettings.enabled and autoGatherTween then
+        autoGatherTween:Cancel()
+        autoGatherTween = nil
+    end
+end
+
+task.spawn(function()
+    while true do
+        if autoGatherSettings.enabled and not farmEnabled and not flyEnabled
+            and rootPart and rootPart.Parent then
+            local resource, part = getNearestAutoGatherTarget()
+            if resource and part then
+                local away = rootPart.Position - part.Position
+                local horizontalAway = Vector3.new(away.X, 0, away.Z)
+                if horizontalAway.Magnitude < 0.01 then
+                    horizontalAway = Vector3.new(0, 0, -1)
+                else
+                    horizontalAway = horizontalAway.Unit
+                end
+                local approachPosition = part.Position
+                    + Vector3.new(0, rootPart.Size.Y / 2 + 1, 0)
+                    + horizontalAway * 2.5
+                local facePosition = Vector3.new(part.Position.X, approachPosition.Y, part.Position.Z)
+                local destination = CFrame.new(approachPosition, facePosition)
+                local distance = (rootPart.Position - approachPosition).Magnitude
+
+                if distance > 1.5 then
+                    local tween = TweenService:Create(
+                        rootPart,
+                        TweenInfo.new(math.clamp(distance / 100, 0.15, 1.25), Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                        { CFrame = destination }
+                    )
+                    autoGatherTween = tween
+                    tween:Play()
+                    local result = tween.Completed:Wait()
+                    if autoGatherTween == tween then autoGatherTween = nil end
+
+                    if result ~= Enum.PlaybackState.Completed then
+                        task.wait(0.1)
+                        continue
+                    end
+                end
+
+                if autoGatherSettings.enabled and not farmEnabled and not flyEnabled
+                    and resource.Parent and part.Parent then
+                    lastGatherAttempt[resource] = os.clock()
+                    pcall(pressGatherKey)
+                    task.wait(0.2)
+                end
+            else
+                task.wait(0.25)
+            end
+        else
+            task.wait(0.2)
+        end
+    end
+end)
+
 local function loadMacLib()
 local MacLib = { 
 	Options = {}, 
@@ -7719,6 +7839,35 @@ farmRight:Slider({
     Precision = 0,
     Callback = function(value) farmDodgeDistance = value end,
 }, "FarmDodgeDistance")
+
+gatherLeft:Header({ Name = "Auto Gather" })
+gatherLeft:Toggle({
+    Name = "Auto Gather",
+    Default = autoGatherSettings.enabled,
+    Callback = setAutoGatherEnabled,
+}, "AutoGatherToggle")
+gatherLeft:Slider({
+    Name = "Gather radius",
+    Default = autoGatherSettings.radius,
+    Minimum = 10,
+    Maximum = 250,
+    Precision = 0,
+    Callback = function(value) autoGatherSettings.radius = value end,
+}, "AutoGatherRadius")
+gatherLeft:Toggle({
+    Name = "Gather ores",
+    Default = autoGatherSettings.ores,
+    Callback = function(value) autoGatherSettings.ores = value == true end,
+}, "AutoGatherOres")
+gatherLeft:Toggle({
+    Name = "Gather crops",
+    Default = autoGatherSettings.crops,
+    Callback = function(value) autoGatherSettings.crops = value == true end,
+}, "AutoGatherCrops")
+gatherLeft:Paragraph({
+    Header = "Interaction",
+    Body = "Pilih resource terdekat dalam radius, tween ke jarak interaksi, lalu tekan E. Auto Gather berhenti sementara saat Farm atau Fly aktif.",
+})
 
 gatherLeft:Header({ Name = "Auto Harvest" })
 gatherLeft:Toggle({
