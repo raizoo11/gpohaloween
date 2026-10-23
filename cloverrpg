@@ -1946,7 +1946,11 @@ addCursorPart("Center", UDim2.fromOffset(4, 4), UDim2.fromOffset(9, 9))
 local function setCustomCursorEnabled(enabled)
     customCursorEnabled = enabled == true
     cursorMark.Visible = customCursorEnabled
-    UserInputService.MouseIconEnabled = customCursorEnabled and false or originalMouseIconEnabled
+    if customCursorEnabled then
+        UserInputService.MouseIconEnabled = false
+    else
+        UserInputService.MouseIconEnabled = originalMouseIconEnabled
+    end
 
     if customCursorConnection then
         customCursorConnection:Disconnect()
