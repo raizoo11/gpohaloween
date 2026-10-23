@@ -7507,6 +7507,7 @@ function MacLib:Demo()
 	tabs.Settings:InsertConfigSection("Left")
 
 	Window.onUnloaded(function()
+        if gatherConnection then gatherConnection:Disconnect() end
 		print("Unloaded!")
 	end)
 
