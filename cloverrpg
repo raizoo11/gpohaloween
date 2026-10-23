@@ -1641,8 +1641,7 @@ end)
 local autoGatherInput = game:GetService("VirtualInputManager")
 local autoGatherSettings = {
     enabled = false,
-    ores = true,
-    crops = true,
+    targetMode = "Nearest Ore/Gather",
     radius = 70,
     mode = "Tween",
 }
@@ -1765,8 +1764,14 @@ local function getNearestAutoGatherTarget()
     if not rootPart or not rootPart.Parent then return nil end
     local ores, crops = getAutoGatherFolders()
     local candidates = {}
-    if autoGatherSettings.ores and ores then candidates[#candidates + 1] = ores end
-    if autoGatherSettings.crops and crops then candidates[#candidates + 1] = crops end
+    if autoGatherSettings.targetMode == "Nearest Ore" then
+        if ores then candidates[#candidates + 1] = ores end
+    elseif autoGatherSettings.targetMode == "Nearest Gather" then
+        if crops then candidates[#candidates + 1] = crops end
+    else
+        if ores then candidates[#candidates + 1] = ores end
+        if crops then candidates[#candidates + 1] = crops end
+    end
 
     local nearest, nearestPart, nearestDistance
     local now = os.clock()
@@ -8140,16 +8145,15 @@ gatherLeft:Dropdown({
     Required = true,
     Callback = setAutoGatherMode,
 }, "AutoGatherMode")
-gatherLeft:Toggle({
-    Name = "Gather ores",
-    Default = autoGatherSettings.ores,
-    Callback = function(value) autoGatherSettings.ores = value == true end,
-}, "AutoGatherOres")
-gatherLeft:Toggle({
-    Name = "Gather crops",
-    Default = autoGatherSettings.crops,
-    Callback = function(value) autoGatherSettings.crops = value == true end,
-}, "AutoGatherCrops")
+gatherLeft:Dropdown({
+    Name = "Gather target",
+    Options = { "Nearest Ore", "Nearest Gather", "Nearest Ore/Gather" },
+    Default = 3,
+    Required = true,
+    Callback = function(value)
+        if value then autoGatherSettings.targetMode = value end
+    end,
+}, "AutoGatherTarget")
 gatherLeft:Paragraph({
     Header = "Interaction",
     Body = "Pilih resource terdekat dalam radius, bergerak dengan mode pilihan, lalu tekan E. Pergerakan berhenti selama minigame, Farm, atau Fly aktif.",
