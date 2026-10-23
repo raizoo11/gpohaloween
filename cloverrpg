@@ -1644,9 +1644,75 @@ local autoGatherSettings = {
     ores = true,
     crops = true,
     radius = 70,
+    mode = "Tween",
 }
 local autoGatherTween = nil
 local lastGatherAttempt = setmetatable({}, { __mode = "k" })
+
+local gatherMovementKeyCodes = {
+    W = Enum.KeyCode.W, A = Enum.KeyCode.A,
+    S = Enum.KeyCode.S, D = Enum.KeyCode.D,
+}
+local heldGatherMovementKeys = {}
+local function setGatherMovementKeys(desiredKeys)
+    desiredKeys = desiredKeys or {}
+    for name, keyCode in pairs(gatherMovementKeyCodes) do
+        local shouldHold = desiredKeys[name] == true
+        if shouldHold ~= (heldGatherMovementKeys[name] == true) then
+            pcall(function()
+                autoGatherInput:SendKeyEvent(shouldHold, keyCode, false, game)
+            end)
+            heldGatherMovementKeys[name] = shouldHold
+        end
+    end
+end
+
+local function walkToGatherTarget(resource, part, destination)
+    local startedAt = os.clock()
+    local initialDistance = (rootPart.Position - destination).Magnitude
+    local timeout = math.clamp(initialDistance / 8 + 3, 4, 25)
+
+    while resource.Parent and part.Parent
+        and autoGatherSettings.enabled
+        and autoGatherSettings.mode == "Walk (WASD)"
+        and not farmEnabled and not flyEnabled
+        and not isGatherMinigameActive() do
+        local displacement = destination - rootPart.Position
+        local horizontal = Vector3.new(displacement.X, 0, displacement.Z)
+        if horizontal.Magnitude <= 3.5 and math.abs(displacement.Y) <= 4 then
+            setGatherMovementKeys()
+            return true
+        end
+
+        local camera = workspace.CurrentCamera
+        local forward = camera and Vector3.new(camera.CFrame.LookVector.X, 0, camera.CFrame.LookVector.Z)
+            or Vector3.new(0, 0, -1)
+        if forward.Magnitude < 0.01 then
+            forward = Vector3.new(rootPart.CFrame.LookVector.X, 0, rootPart.CFrame.LookVector.Z)
+        end
+        forward = forward.Unit
+        local right = Vector3.new(-forward.Z, 0, forward.X)
+        local direction = horizontal.Magnitude > 0 and horizontal.Unit or Vector3.zero
+        local forwardAmount = direction:Dot(forward)
+        local rightAmount = direction:Dot(right)
+
+        setGatherMovementKeys({
+            W = forwardAmount > 0.25,
+            S = forwardAmount < -0.25,
+            D = rightAmount > 0.25,
+            A = rightAmount < -0.25,
+        })
+
+        if os.clock() - startedAt >= timeout then
+            setGatherMovementKeys()
+            return false
+        end
+        task.wait(0.05)
+    end
+
+    setGatherMovementKeys()
+    return false
+end
 
 local function getAutoGatherFolders()
     local mapFolder = workspace:FindFirstChild("Map")
@@ -1736,7 +1802,20 @@ end
 
 local function setAutoGatherEnabled(enabled)
     autoGatherSettings.enabled = enabled == true
-    if not autoGatherSettings.enabled and autoGatherTween then
+    if not autoGatherSettings.enabled then
+        setGatherMovementKeys()
+        if autoGatherTween then
+            autoGatherTween:Cancel()
+            autoGatherTween = nil
+        end
+    end
+end
+
+local function setAutoGatherMode(mode)
+    if mode ~= "Tween" and mode ~= "Walk (WASD)" then return end
+    autoGatherSettings.mode = mode
+    setGatherMovementKeys()
+    if mode == "Walk (WASD)" and autoGatherTween then
         autoGatherTween:Cancel()
         autoGatherTween = nil
     end
@@ -1744,9 +1823,12 @@ end
 
 -- Batalkan gerakan seketika ketika minigame muncul.
 local autoGatherMinigameWatcher = RunService.RenderStepped:Connect(function()
-    if autoGatherSettings.enabled and isGatherMinigameActive() and autoGatherTween then
-        autoGatherTween:Cancel()
-        autoGatherTween = nil
+    if autoGatherSettings.enabled and isGatherMinigameActive() then
+        setGatherMovementKeys()
+        if autoGatherTween then
+            autoGatherTween:Cancel()
+            autoGatherTween = nil
+        end
     end
 end)
 
@@ -1770,7 +1852,12 @@ task.spawn(function()
                 local destination = CFrame.new(approachPosition, facePosition)
                 local distance = (rootPart.Position - approachPosition).Magnitude
 
-                if distance > 1.5 then
+                if autoGatherSettings.mode == "Walk (WASD)" then
+                    if not walkToGatherTarget(resource, part, approachPosition) then
+                        task.wait(0.1)
+                        continue
+                    end
+                elseif distance > 1.5 then
                     local tween = TweenService:Create(
                         rootPart,
                         TweenInfo.new(math.clamp(distance / 100, 0.15, 1.25), Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
@@ -1797,6 +1884,7 @@ task.spawn(function()
                 task.wait(0.25)
             end
         else
+            setGatherMovementKeys()
             if autoGatherTween then
                 autoGatherTween:Cancel()
                 autoGatherTween = nil
@@ -7681,6 +7769,7 @@ function MacLib:Demo()
 	Window.onUnloaded(function()
         if gatherConnection then gatherConnection:Disconnect() end
         if autoGatherMinigameWatcher then autoGatherMinigameWatcher:Disconnect() end
+        setGatherMovementKeys()
         autoGatherSettings.enabled = false
         if autoGatherTween then autoGatherTween:Cancel() end
 		print("Unloaded!")
@@ -7909,6 +7998,13 @@ gatherLeft:Slider({
     Precision = 0,
     Callback = function(value) autoGatherSettings.radius = value end,
 }, "AutoGatherRadius")
+gatherLeft:Dropdown({
+    Name = "Movement mode",
+    Options = { "Tween", "Walk (WASD)" },
+    Default = 1,
+    Required = true,
+    Callback = setAutoGatherMode,
+}, "AutoGatherMode")
 gatherLeft:Toggle({
     Name = "Gather ores",
     Default = autoGatherSettings.ores,
