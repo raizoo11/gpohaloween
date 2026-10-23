@@ -1462,6 +1462,178 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
     end
 end)
 
+
+----------------------------------------------------------------
+-- AUTO HARVEST + AUTO MINING
+----------------------------------------------------------------
+local gatherGuiService = game:GetService("GuiService")
+local gatherInput = game:GetService("VirtualInputManager")
+local gatherPlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local gatherSettings = {
+    harvest = false, harvestClick = false, mining = false, critOnly = false,
+    radiusScale = 0.45, clickMargin = 12, lead = 0, tolerance = 0.6,
+    cooldown = 0.35, center = 0.5,
+}
+local function gatherAngleDiff(a, b)
+    return (a - b + 540) % 360 - 180
+end
+local function gatherIsShown(guiObject)
+    local object = guiObject
+    while object and object ~= gatherPlayerGui do
+        if object:IsA("GuiObject") and not object.Visible then return false end
+        if object:IsA("ScreenGui") and not object.Enabled then return false end
+        object = object.Parent
+    end
+    return true
+end
+
+local harvestWasClicked = false
+local function runAutoHarvest()
+    local gui = gatherPlayerGui:FindFirstChild("HarvestRings")
+    local holder = gui and gui:FindFirstChild("Holder")
+    local arena = holder and holder:FindFirstChild("Arena")
+    local playerMarker = arena and arena:FindFirstChild("Player")
+    local rings = arena and arena:FindFirstChild("Rings")
+    if not (gui and gui.Enabled and holder.Visible and playerMarker and rings) then
+        harvestWasClicked = false
+        return
+    end
+    local activeRing, smallestSize
+    for _, ring in ipairs(rings:GetChildren()) do
+        if ring.Name == "ClosingRing" and ring:IsA("GuiObject") and ring.Visible then
+            local size = ring.AbsoluteSize.X
+            if not smallestSize or size < smallestSize then
+                activeRing, smallestSize = ring, size
+            end
+        end
+    end
+    if not activeRing then harvestWasClicked = false return end
+    local center = playerMarker.AbsolutePosition + playerMarker.AbsoluteSize / 2
+    local radius = arena.AbsoluteSize.X * gatherSettings.radiusScale
+    local angle = math.rad(activeRing.Rotation)
+    local direction = Vector2.new(math.cos(angle), math.sin(angle))
+    local position = center + direction * radius + gatherGuiService:GetGuiInset()
+    local x, y = math.floor(position.X + 0.5), math.floor(position.Y + 0.5)
+    gatherInput:SendMouseMoveEvent(x, y, game)
+    if gatherSettings.harvestClick and not harvestWasClicked
+        and smallestSize <= playerMarker.AbsoluteSize.X + gatherSettings.clickMargin then
+        harvestWasClicked = true
+        gatherInput:SendMouseButtonEvent(x, y, 0, true, game, 0)
+        gatherInput:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    end
+end
+
+local function miningZoneContains(zoneFolder, angle)
+    if not zoneFolder then return false end
+    local segments = {}
+    for _, segment in ipairs(zoneFolder:GetChildren()) do
+        if segment.Name == "Segment" then segments[#segments + 1] = segment.Rotation end
+    end
+    local count = #segments
+    if count == 0 then return false end
+    local inSegment = false
+    for _, rotation in ipairs(segments) do
+        if math.abs(gatherAngleDiff(angle, rotation)) <= gatherSettings.tolerance then
+            inSegment = true
+            break
+        end
+    end
+    if not inSegment then return false end
+    local sumX, sumY = 0, 0
+    for _, rotation in ipairs(segments) do
+        sumX += math.cos(math.rad(rotation))
+        sumY += math.sin(math.rad(rotation))
+    end
+    local midpoint = math.deg(math.atan2(sumY, sumX))
+    local allowed = (count / 2) * (1 - gatherSettings.center)
+    return math.abs(gatherAngleDiff(angle, midpoint)) <= math.max(allowed, gatherSettings.tolerance)
+end
+
+local spinnerLastRotation, spinnerLastMove = {}, {}
+local activeMiningSpinner
+local function scanMiningSpinners(root)
+    for _, object in ipairs(root:GetDescendants()) do
+        if object.Name == "Spinner" and object:IsA("GuiObject")
+            and object.Parent and object.Parent.Name == "Ring" then
+            local rotation = object.Rotation
+            if spinnerLastRotation[object]
+                and math.abs(gatherAngleDiff(rotation, spinnerLastRotation[object])) > 0.01 then
+                spinnerLastMove[object] = os.clock()
+            end
+            spinnerLastRotation[object] = rotation
+        end
+    end
+    activeMiningSpinner = nil
+    local newestMove = 0
+    for spinner, movedAt in pairs(spinnerLastMove) do
+        if spinner.Parent and os.clock() - movedAt < 0.3
+            and movedAt > newestMove and gatherIsShown(spinner) then
+            activeMiningSpinner, newestMove = spinner, movedAt
+        elseif not spinner.Parent then
+            spinnerLastMove[spinner] = nil
+            spinnerLastRotation[spinner] = nil
+        end
+    end
+end
+
+local previousMiningRotation, previousMiningTime, previousMiningSpinner, lastMiningClick = nil, nil, nil, 0
+local miningScanAccumulator = 0
+local function runAutoMining(deltaTime)
+    local root = gatherPlayerGui:FindFirstChild("HarvestTiming")
+    if not root then
+        activeMiningSpinner = nil
+        previousMiningRotation = nil
+        previousMiningSpinner = nil
+        return
+    end
+    miningScanAccumulator += deltaTime
+    if miningScanAccumulator >= 0.1 or not activeMiningSpinner then
+        miningScanAccumulator = 0
+        scanMiningSpinners(root)
+    end
+    if not gatherSettings.mining or not activeMiningSpinner or not activeMiningSpinner.Parent then
+        previousMiningRotation = nil
+        previousMiningSpinner = nil
+        return
+    end
+    if activeMiningSpinner ~= previousMiningSpinner then
+        previousMiningRotation = nil
+        previousMiningSpinner = activeMiningSpinner
+    end
+    local now = os.clock()
+    local rotation = activeMiningSpinner.Rotation
+    local velocity = 0
+    if previousMiningRotation and previousMiningTime and now > previousMiningTime then
+        velocity = gatherAngleDiff(rotation, previousMiningRotation) / (now - previousMiningTime)
+    end
+    previousMiningRotation, previousMiningTime = rotation, now
+    local predictedRotation = (rotation + velocity * gatherSettings.lead) % 360
+    local outline = activeMiningSpinner.Parent:FindFirstChild("Outline")
+    local zones = outline and outline:FindFirstChild("Zones")
+    if not zones then return end
+    local hit
+    if gatherSettings.critOnly then
+        hit = miningZoneContains(zones:FindFirstChild("CritZone"), predictedRotation)
+    else
+        hit = miningZoneContains(zones:FindFirstChild("GreenZone"), predictedRotation)
+            or miningZoneContains(zones:FindFirstChild("CritZone"), predictedRotation)
+    end
+    if hit and now - lastMiningClick >= gatherSettings.cooldown then
+        lastMiningClick = now
+        local mousePosition = UserInputService:GetMouseLocation()
+        gatherInput:SendMouseButtonEvent(mousePosition.X, mousePosition.Y, 0, true, game, 0)
+        task.delay(0.02, function()
+            gatherInput:SendMouseButtonEvent(mousePosition.X, mousePosition.Y, 0, false, game, 0)
+        end)
+    end
+end
+
+local gatherConnection = RunService.RenderStepped:Connect(function(deltaTime)
+    if gatherSettings.harvest or gatherSettings.harvestClick then pcall(runAutoHarvest) end
+    pcall(runAutoMining, deltaTime)
+end)
+
 local function loadMacLib()
 local MacLib = { 
 	Options = {}, 
@@ -7363,6 +7535,7 @@ local moveTab = movementGroup:Tab({ Name = "Move", Image = "rbxassetid://1070979
 local farmTab = movementGroup:Tab({ Name = "Farm", Image = "rbxassetid://108952102602834" })
 local visualTab = movementGroup:Tab({ Name = "Visual", Image = "rbxassetid://90336395745819" })
 local espTab = movementGroup:Tab({ Name = "ESP", Image = "rbxassetid://18865373378" })
+local gatherTab = movementGroup:Tab({ Name = "Gather", Image = "rbxassetid://108952102602834" })
 
 local moveLeft = moveTab:Section({ Side = "Left" })
 local moveRight = moveTab:Section({ Side = "Right" })
@@ -7371,6 +7544,8 @@ local farmRight = farmTab:Section({ Side = "Right" })
 local visualLeft = visualTab:Section({ Side = "Left" })
 local espLeft = espTab:Section({ Side = "Left" })
 local espRight = espTab:Section({ Side = "Right" })
+local gatherLeft = gatherTab:Section({ Side = "Left" })
+local gatherRight = gatherTab:Section({ Side = "Right" })
 
 local function setWalkSpeedState(state)
     if walkSpeedEnabled ~= state then
@@ -7543,6 +7718,38 @@ farmRight:Slider({
     Precision = 0,
     Callback = function(value) farmDodgeDistance = value end,
 }, "FarmDodgeDistance")
+
+gatherLeft:Header({ Name = "Auto Harvest" })
+gatherLeft:Toggle({
+    Name = "Harvest cursor tracking",
+    Default = gatherSettings.harvest,
+    Callback = function(value) gatherSettings.harvest = value == true end,
+}, "AutoHarvestToggle")
+gatherLeft:Toggle({
+    Name = "Harvest click",
+    Default = gatherSettings.harvestClick,
+    Callback = function(value) gatherSettings.harvestClick = value == true end,
+}, "AutoHarvestClickToggle")
+gatherLeft:Paragraph({
+    Header = "Harvest",
+    Body = "Nyalakan cursor tracking untuk mengikuti ring. Aktifkan Harvest click agar script mengklik saat waktunya tepat.",
+})
+
+gatherRight:Header({ Name = "Auto Mining" })
+gatherRight:Toggle({
+    Name = "Mining",
+    Default = gatherSettings.mining,
+    Callback = function(value) gatherSettings.mining = value == true end,
+}, "AutoMiningToggle")
+gatherRight:Toggle({
+    Name = "Crit only",
+    Default = gatherSettings.critOnly,
+    Callback = function(value) gatherSettings.critOnly = value == true end,
+}, "AutoMiningCritOnlyToggle")
+gatherRight:Paragraph({
+    Header = "Mining mode",
+    Body = "Crit only membatasi klik ke zona kuning. Jika mati, zona hijau dan kuning sama-sama digunakan.",
+})
 
 visualLeft:Header({ Name = "Visuals" })
 visualLeft:Toggle({
