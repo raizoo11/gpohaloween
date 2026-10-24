@@ -1763,8 +1763,13 @@ end
 
 local function getAutoGatherNameOptions()
     local ores, crops = getAutoGatherFolders()
-    local options = { "Any" }
-    local seen = { Any = true }
+    local options = { "Any", "Nearest Ore", "Nearest Gather", "Nearest Ore/Gather" }
+    local seen = {
+        Any = true,
+        ["Nearest Ore"] = true,
+        ["Nearest Gather"] = true,
+        ["Nearest Ore/Gather"] = true,
+    }
 
     local function addResources(folder, prefix)
         if not folder then return end
@@ -1790,14 +1795,25 @@ local function getNearestAutoGatherTarget()
     local ores, crops = getAutoGatherFolders()
     local candidates = {}
     local selectedName = autoGatherSettings.targetName
+    local selectedMode = autoGatherSettings.targetMode
 
-    -- Pilihan nama spesifik berdiri sendiri; mode kategori hanya membatasi pilihan "Any".
-    if selectedName ~= "Any" then
+    -- Opsi nearest di dropdown nama mengatur kategori target secara langsung.
+    if selectedName == "Nearest Ore"
+        or selectedName == "Nearest Gather"
+        or selectedName == "Nearest Ore/Gather" then
+        selectedMode = selectedName
+    end
+
+    -- Nama resource spesifik berdiri sendiri; mode kategori dipakai untuk pilihan umum.
+    if selectedName ~= "Any"
+        and selectedName ~= "Nearest Ore"
+        and selectedName ~= "Nearest Gather"
+        and selectedName ~= "Nearest Ore/Gather" then
         if ores then candidates[#candidates + 1] = { folder = ores, prefix = "Ore: " } end
         if crops then candidates[#candidates + 1] = { folder = crops, prefix = "Gather: " } end
-    elseif autoGatherSettings.targetMode == "Nearest Ore" then
+    elseif selectedMode == "Nearest Ore" then
         if ores then candidates[#candidates + 1] = { folder = ores, prefix = "Ore: " } end
-    elseif autoGatherSettings.targetMode == "Nearest Gather" then
+    elseif selectedMode == "Nearest Gather" then
         if crops then candidates[#candidates + 1] = { folder = crops, prefix = "Gather: " } end
     else
         if ores then candidates[#candidates + 1] = { folder = ores, prefix = "Ore: " } end
