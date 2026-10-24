@@ -1262,7 +1262,8 @@ task.spawn(function()
             local system = byteNet and byteNet:FindFirstChild("system")
             local remote = system and system:FindFirstChild("ByteNetReliable")
             if remote and remote:IsA("RemoteEvent") then
-                local shouldDodge = farmDodgeEnabled and farmMode == "Behind"
+                local shouldDodge = farmDodgeEnabled
+                    and (farmMode == "Behind" or farmMode == "Above")
                 farmAttackActive = shouldDodge
 
                 pcall(function()
@@ -1338,9 +1339,13 @@ local function computeFarmCFrame(targetRoot)
     if farmMode == "Above" then
         -- Mode Above hanya memakai sumbu Y; tinggi target dikunci saat dipilih.
         local stableY = farmTargetY or targetCFrame.Position.Y
+        local attackHeight = math.abs(farmOffsetY)
+        local dodgeHeight = math.abs(farmDodgeDistance)
+        local desiredHeight = farmDodgeEnabled and not farmAttackActive
+            and dodgeHeight or attackHeight
         offsetPos = Vector3.new(
             targetCFrame.Position.X,
-            stableY + math.abs(farmOffsetY),
+            stableY + desiredHeight,
             targetCFrame.Position.Z
         )
     elseif farmMode == "Bottom" then
@@ -8229,7 +8234,7 @@ farmRight:Slider({
     Callback = function(value) farmSwingDuration = value end,
 }, "FarmSwingDuration")
 farmRight:Slider({
-    Name = "Dodge position distance (Z)",
+    Name = "Dodge position distance (Y/Z)",
     Default = farmDodgeDistance,
     Minimum = 0,
     Maximum = FARM_MAX_XZ,
