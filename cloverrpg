@@ -1926,7 +1926,11 @@ end
 
 -- Batalkan gerakan seketika ketika minigame muncul.
 local autoGatherMinigameWatcher = RunService.RenderStepped:Connect(function()
-    if currentAutoGatherTarget and isAutoGatherResourceDepleted(currentAutoGatherTarget) then
+    if currentAutoGatherTarget and (
+        not currentAutoGatherTarget.Parent
+        or not currentAutoGatherTarget:IsDescendantOf(workspace)
+        or isAutoGatherResourceDepleted(currentAutoGatherTarget)
+    ) then
         currentAutoGatherTarget = nil
         if autoGatherTween then
             autoGatherTween:Cancel()
