@@ -1232,6 +1232,7 @@ local farmAttackActive = false
 local farmKeybind = Enum.KeyCode.F4
 local capturingFarmKeybind = false
 local FARM_DETECT_RANGE = 70
+local farmTargetName = "Nearest Mob"
 
 local currentFarmTarget = nil
 local farmTargetY = nil
@@ -1242,6 +1243,7 @@ local function isValidFarmTarget(model)
     local hum = model:FindFirstChildOfClass("Humanoid")
     local root = model:FindFirstChild("HumanoidRootPart")
     if not hum or hum.Health <= 0 or not root then return false end
+    if farmTargetName ~= "Nearest Mob" and model.Name ~= farmTargetName then return false end
     local dist = (root.Position - rootPart.Position).Magnitude
     return dist <= FARM_DETECT_RANGE
 end
@@ -1294,7 +1296,8 @@ local function getNearestFightableNPC()
     for _, model in ipairs(folder:GetChildren()) do
         local hum = model:FindFirstChildOfClass("Humanoid")
         local root = model:FindFirstChild("HumanoidRootPart")
-        if hum and hum.Health > 0 and root then
+        if hum and hum.Health > 0 and root
+            and (farmTargetName == "Nearest Mob" or model.Name == farmTargetName) then
             local dist = (root.Position - rootPart.Position).Magnitude
             if dist <= FARM_DETECT_RANGE and dist < nearestDist then
                 nearestDist = dist
@@ -1303,6 +1306,26 @@ local function getNearestFightableNPC()
         end
     end
     return nearest
+end
+
+local function getFarmMobOptions()
+    local options = { "Nearest Mob" }
+    local seen = { ["Nearest Mob"] = true }
+    local folder = workspace:FindFirstChild("FightableNPCS")
+    if folder then
+        for _, model in ipairs(folder:GetChildren()) do
+            if not seen[model.Name] then
+                seen[model.Name] = true
+                options[#options + 1] = model.Name
+            end
+        end
+    end
+    table.sort(options, function(a, b)
+        if a == "Nearest Mob" then return true end
+        if b == "Nearest Mob" then return false end
+        return string.lower(a) < string.lower(b)
+    end)
+    return options
 end
 
 local MIN_BEHIND_DISTANCE = 3
@@ -8133,13 +8156,38 @@ farmLeft:Slider({
     Name = "Farm radius",
     Default = FARM_DETECT_RANGE,
     Minimum = 10,
-    Maximum = 500,
+    Maximum = 1000,
     Precision = 0,
     Callback = function(value) FARM_DETECT_RANGE = value end,
 }, "FarmRadius")
+local farmMobDropdown = farmLeft:Dropdown({
+    Name = "Mob target",
+    Options = getFarmMobOptions(),
+    Default = 1,
+    Required = true,
+    Callback = function(value)
+        if value then
+            farmTargetName = value
+            setFarmTarget(nil)
+        end
+    end,
+}, "FarmMobTarget")
+farmLeft:Button({
+    Name = "Refresh mob list",
+    Callback = function()
+        local selected = farmTargetName
+        farmMobDropdown:ClearOptions()
+        farmMobDropdown:InsertOptions(getFarmMobOptions())
+        if farmMobDropdown:IsOption(selected) then
+            farmMobDropdown:UpdateSelection(selected)
+        else
+            farmMobDropdown:UpdateSelection("Nearest Mob")
+        end
+    end,
+}, "FarmRefreshMobList")
 farmLeft:Paragraph({
     Header = "Target",
-    Body = "Target workspace.FightableNPCS di dalam radius yang dipilih. Freefall dinonaktifkan selama farm aktif.",
+    Body = "Pilih mob tertentu atau Nearest Mob. Daftar membaca workspace.FightableNPCS; radius membatasi jarak pencarian (maksimum 1000). Tekan Refresh mob list setelah daftar berubah.",
 })
 
 local FARM_MIN_XZ, FARM_MAX_XZ = -50, 50
