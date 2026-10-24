@@ -8201,16 +8201,6 @@ gatherLeft:Dropdown({
     Required = true,
     Callback = setAutoGatherMode,
 }, "AutoGatherMode")
-gatherLeft:Dropdown({
-    Name = "Gather target",
-    Options = { "Nearest Ore", "Nearest Gather", "Nearest Ore/Gather" },
-    Default = 3,
-    Required = true,
-    Callback = function(value)
-        if value then autoGatherSettings.targetMode = value end
-    end,
-}, "AutoGatherTarget")
-
 local resourceNameDropdown = gatherLeft:Dropdown({
     Name = "Ore / Gather name",
     Options = getAutoGatherNameOptions(),
