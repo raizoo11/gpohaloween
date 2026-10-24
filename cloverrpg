@@ -1262,8 +1262,7 @@ task.spawn(function()
             local system = byteNet and byteNet:FindFirstChild("system")
             local remote = system and system:FindFirstChild("ByteNetReliable")
             if remote and remote:IsA("RemoteEvent") then
-                local shouldDodge = farmDodgeEnabled
-                    and (farmMode == "Behind" or farmMode == "Above")
+                local shouldDodge = farmDodgeEnabled and farmMode == "Behind"
                 farmAttackActive = shouldDodge
 
                 pcall(function()
@@ -1339,13 +1338,9 @@ local function computeFarmCFrame(targetRoot)
     if farmMode == "Above" then
         -- Mode Above hanya memakai sumbu Y; tinggi target dikunci saat dipilih.
         local stableY = farmTargetY or targetCFrame.Position.Y
-        local attackHeight = math.abs(farmOffsetY)
-        local dodgeHeight = math.abs(farmDodgeDistance)
-        local desiredHeight = farmDodgeEnabled and not farmAttackActive
-            and dodgeHeight or attackHeight
         offsetPos = Vector3.new(
             targetCFrame.Position.X,
-            stableY + desiredHeight,
+            stableY + math.abs(farmOffsetY),
             targetCFrame.Position.Z
         )
     elseif farmMode == "Bottom" then
@@ -1419,20 +1414,11 @@ RunService.Heartbeat:Connect(function()
         humanoid:ChangeState(Enum.HumanoidStateType.Running)
     end
 
-    -- Tahan posisi vertikal di atas target; gravitasi tetap bekerja setelah tween selesai.
-    if farmMode == "Above" and isValidFarmTarget(currentFarmTarget) then
-        local targetRoot = currentFarmTarget:FindFirstChild("HumanoidRootPart")
-        if targetRoot then
-            local desiredY = computeFarmCFrame(targetRoot).Position.Y
-            local velocity = rootPart.AssemblyLinearVelocity
-            if math.abs(rootPart.Position.Y - desiredY) > 0.05 or math.abs(velocity.Y) > 0.05 then
-                rootPart.AssemblyLinearVelocity = Vector3.new(velocity.X, 0, velocity.Z)
-                rootPart.CFrame = CFrame.new(
-                    rootPart.Position.X,
-                    desiredY,
-                    rootPart.Position.Z
-                ) * rootPart.CFrame.Rotation
-            end
+    -- Biarkan tween mengatur posisi Y di mode Above; nolkan velocity vertikal agar gravitasi tidak menarik karakter turun.
+    if farmMode == "Above" then
+        local velocity = rootPart.AssemblyLinearVelocity
+        if math.abs(velocity.Y) > 0.05 then
+            rootPart.AssemblyLinearVelocity = Vector3.new(velocity.X, 0, velocity.Z)
         end
     end
 end)
@@ -8234,7 +8220,7 @@ farmRight:Slider({
     Callback = function(value) farmSwingDuration = value end,
 }, "FarmSwingDuration")
 farmRight:Slider({
-    Name = "Dodge position distance (Y/Z)",
+    Name = "Dodge position distance (Z)",
     Default = farmDodgeDistance,
     Minimum = 0,
     Maximum = FARM_MAX_XZ,
