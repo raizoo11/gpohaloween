@@ -1238,38 +1238,6 @@ local farmTargetName = "Nearest Mob"
 local currentFarmTarget = nil
 local farmTargetY = nil
 local farmTween = nil
-local farmPlatform = nil
-
-local function destroyFarmPlatform()
-    if farmPlatform then
-        farmPlatform:Destroy()
-        farmPlatform = nil
-    end
-end
-
-local function updateFarmPlatform()
-    if not farmEnabled or farmMode ~= "Above"
-        or not rootPart or not rootPart.Parent then
-        destroyFarmPlatform()
-        return
-    end
-
-    if not farmPlatform or not farmPlatform.Parent then
-        farmPlatform = Instance.new("Part")
-        farmPlatform.Name = "CloverFarmPlatform"
-        farmPlatform.Size = Vector3.new(6, 1, 6)
-        farmPlatform.Anchored = true
-        farmPlatform.CanCollide = true
-        farmPlatform.CanTouch = false
-        farmPlatform.CanQuery = false
-        farmPlatform.Transparency = 1
-        farmPlatform.CastShadow = false
-        farmPlatform.Parent = workspace
-    end
-
-    local offset = rootPart.Size.Y / 2 + humanoid.HipHeight + farmPlatform.Size.Y / 2
-    farmPlatform.Position = rootPart.Position - Vector3.new(0, offset, 0)
-end
 
 local function isValidFarmTarget(model)
     if not model or not model.Parent then return false end
@@ -1436,12 +1404,7 @@ end)
 RunService.Heartbeat:Connect(function()
     if not farmEnabled then return end
     if not character or not character.Parent then return end
-    if flyEnabled then
-        destroyFarmPlatform()
-        return
-    end
-
-    updateFarmPlatform()
+    if flyEnabled then return end
 
     if not isValidFarmTarget(currentFarmTarget) then
         setFarmTarget(getNearestFightableNPC())
@@ -1489,7 +1452,6 @@ local function toggleFarm()
         end
         currentFarmTarget = nil
         farmAttackActive = false
-        destroyFarmPlatform()
         humanoid:SetStateEnabled(Enum.HumanoidStateType.Freefall, true)
     end
 end
@@ -1506,7 +1468,6 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
     noclipEnabled = false
     farmEnabled = false
     currentFarmTarget = nil
-    destroyFarmPlatform()
 
     applyWalkSpeed()
     watchWalkSpeed(humanoid)
@@ -8022,7 +7983,6 @@ function MacLib:Demo()
         setCustomCursorEnabled(false)
         if customCursorConnection then customCursorConnection:Disconnect() end
         if customCursorGui then customCursorGui:Destroy() end
-        destroyFarmPlatform()
 		print("Unloaded!")
 	end)
 
