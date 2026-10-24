@@ -8186,7 +8186,7 @@ gatherLeft:Slider({
     Name = "Gather radius",
     Default = autoGatherSettings.radius,
     Minimum = 10,
-    Maximum = 250,
+    Maximum = 1000,
     Precision = 0,
     Callback = function(value) autoGatherSettings.radius = value end,
 }, "AutoGatherRadius")
