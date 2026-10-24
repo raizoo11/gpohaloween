@@ -1825,6 +1825,9 @@ local function getNearestAutoGatherTarget()
     for _, candidate in ipairs(candidates) do
         for _, resource in ipairs(candidate.folder:GetChildren()) do
             local matchesName = selectedName == "Any"
+                or selectedName == "Nearest Ore"
+                or selectedName == "Nearest Gather"
+                or selectedName == "Nearest Ore/Gather"
                 or selectedName == candidate.prefix .. resource.Name
             local part = matchesName and getAutoGatherPart(resource)
             local attemptedAt = lastGatherAttempt[resource] or 0
