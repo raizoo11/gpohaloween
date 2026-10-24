@@ -1232,6 +1232,7 @@ local farmAttackActive = false
 local farmKeybind = Enum.KeyCode.F4
 local capturingFarmKeybind = false
 local FARM_DETECT_RANGE = 70
+local FARM_TWEEN_SPEED = 100
 local farmTargetName = "Nearest Mob"
 
 local currentFarmTarget = nil
@@ -1380,7 +1381,7 @@ task.spawn(function()
                 local destination = computeFarmCFrame(targetRoot)
                 local distance = (rootPart.Position - destination.Position).Magnitude
                 if distance > 0.5 then
-                    local duration = math.clamp(distance / 100, 0.05, 0.5)
+                    local duration = math.clamp(distance / FARM_TWEEN_SPEED, 0.05, 5)
                     local tween = TweenService:Create(
                         rootPart,
                         TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
@@ -8185,6 +8186,14 @@ farmLeft:Button({
         end
     end,
 }, "FarmRefreshMobList")
+farmLeft:Slider({
+    Name = "Farm tween speed (studs/s)",
+    Default = FARM_TWEEN_SPEED,
+    Minimum = 10,
+    Maximum = 300,
+    Precision = 0,
+    Callback = function(value) FARM_TWEEN_SPEED = math.max(value, 1) end,
+}, "FarmTweenSpeed")
 farmLeft:Paragraph({
     Header = "Target",
     Body = "Pilih mob tertentu atau Nearest Mob. Daftar membaca workspace.FightableNPCS; radius membatasi jarak pencarian (maksimum 1000). Tekan Refresh mob list setelah daftar berubah.",
