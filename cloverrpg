@@ -1381,7 +1381,7 @@ task.spawn(function()
                 local destination = computeFarmCFrame(targetRoot)
                 local distance = (rootPart.Position - destination.Position).Magnitude
                 if distance > 0.5 then
-                    local duration = math.clamp(distance / FARM_TWEEN_SPEED, 0.05, 5)
+                    local duration = math.max(distance / FARM_TWEEN_SPEED, 0.05)
                     local tween = TweenService:Create(
                         rootPart,
                         TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
