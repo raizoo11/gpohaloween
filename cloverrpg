@@ -7500,8 +7500,12 @@ function MacLib:Window(Settings)
 				}
 			end,
 			Load = function(Flag, data)
-				if MacLib.Options[Flag] and data.value then
-					MacLib.Options[Flag]:UpdateValue(data.value)
+				local slider = MacLib.Options[Flag]
+				if slider and data.value then
+					slider:UpdateValue(data.value)
+					if slider.Settings and slider.Settings.Callback then
+						slider.Settings.Callback(slider:GetValue())
+					end
 				end
 			end
 		},
