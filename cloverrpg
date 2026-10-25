@@ -1234,6 +1234,8 @@ local capturingFarmKeybind = false
 local FARM_DETECT_RANGE = 70
 local FARM_TWEEN_SPEED = 100
 local farmTargetName = "Nearest Mob"
+local farmBossTarget = nil
+local farmSpiderQueenToggle, farmLizardKingToggle
 
 local currentFarmTarget = nil
 local farmTargetY = nil
@@ -1244,7 +1246,12 @@ local function isValidFarmTarget(model)
     local hum = model:FindFirstChildOfClass("Humanoid")
     local root = model:FindFirstChild("HumanoidRootPart")
     if not hum or hum.Health <= 0 or not root then return false end
-    if farmTargetName ~= "Nearest Mob" and model.Name ~= farmTargetName then return false end
+    if farmBossTarget then
+        local normalizedName = string.lower(string.gsub(model.Name, "[^%w]", ""))
+        if not string.find(normalizedName, farmBossTarget, 1, true) then return false end
+    elseif farmTargetName ~= "Nearest Mob" and model.Name ~= farmTargetName then
+        return false
+    end
     local dist = (root.Position - rootPart.Position).Magnitude
     return dist <= FARM_DETECT_RANGE
 end
@@ -1289,16 +1296,51 @@ task.spawn(function()
     end
 end)
 
-local function getNearestFightableNPC()
-    local folder = workspace:FindFirstChild("FightableNPCS")
-    if not folder then return nil end
+local farmBossScanCache = {}
+local farmBossScanAt = {}
 
+local function getFarmBossCandidates(targetKey)
+    local now = os.clock()
+    if farmBossScanAt[targetKey] and now - farmBossScanAt[targetKey] < 1
+        and farmBossScanCache[targetKey] then
+        return farmBossScanCache[targetKey]
+    end
+
+    local matches = {}
+    for _, instance in ipairs(workspace:GetDescendants()) do
+        if instance:IsA("Model") then
+            local normalizedName = string.lower(string.gsub(instance.Name, "[^%w]", ""))
+            if string.find(normalizedName, targetKey, 1, true)
+                and instance:FindFirstChildOfClass("Humanoid")
+                and instance:FindFirstChild("HumanoidRootPart") then
+                matches[#matches + 1] = instance
+            end
+        end
+    end
+    farmBossScanCache[targetKey] = matches
+    farmBossScanAt[targetKey] = now
+    return matches
+end
+
+local function getNearestFightableNPC()
     local nearest, nearestDist = nil, math.huge
-    for _, model in ipairs(folder:GetChildren()) do
+    local candidates = {}
+
+    if farmBossTarget then
+        candidates = getFarmBossCandidates(farmBossTarget)
+    else
+        local folder = workspace:FindFirstChild("FightableNPCS")
+        if not folder then return nil end
+        candidates = folder:GetChildren()
+    end
+
+    for _, model in ipairs(candidates) do
         local hum = model:FindFirstChildOfClass("Humanoid")
         local root = model:FindFirstChild("HumanoidRootPart")
-        if hum and hum.Health > 0 and root
-            and (farmTargetName == "Nearest Mob" or model.Name == farmTargetName) then
+        local matchesTarget = farmBossTarget
+            or farmTargetName == "Nearest Mob"
+            or model.Name == farmTargetName
+        if matchesTarget and hum and hum.Health > 0 and root then
             local dist = (root.Position - rootPart.Position).Magnitude
             if dist <= FARM_DETECT_RANGE and dist < nearestDist then
                 nearestDist = dist
@@ -8164,10 +8206,51 @@ local farmMobDropdown = farmLeft:Dropdown({
     Callback = function(value)
         if value then
             farmTargetName = value
+            farmBossTarget = nil
+            if farmSpiderQueenToggle and farmSpiderQueenToggle:GetState() then
+                farmSpiderQueenToggle:UpdateState(false)
+            end
+            if farmLizardKingToggle and farmLizardKingToggle:GetState() then
+                farmLizardKingToggle:UpdateState(false)
+            end
             setFarmTarget(nil)
         end
     end,
 }, "FarmMobTarget")
+local function setFarmBossMode(targetKey, enabled)
+    if enabled then
+        farmBossTarget = targetKey
+        local otherToggle = targetKey == "spiderqueen"
+            and farmLizardKingToggle or farmSpiderQueenToggle
+        if otherToggle and otherToggle:GetState() then
+            otherToggle:UpdateState(false)
+        end
+        if not farmToggle:GetState() then
+            farmToggle:UpdateState(true)
+        end
+    elseif farmBossTarget == targetKey then
+        farmBossTarget = nil
+    end
+
+    farmBossScanAt[targetKey] = nil
+    setFarmTarget(nil)
+end
+
+farmSpiderQueenToggle = farmLeft:Toggle({
+    Name = "Auto Spider Queen",
+    Default = false,
+    Callback = function(value)
+        setFarmBossMode("spiderqueen", value == true)
+    end,
+}, "FarmSpiderQueenToggle")
+farmLizardKingToggle = farmLeft:Toggle({
+    Name = "Auto Lizard King",
+    Default = false,
+    Callback = function(value)
+        setFarmBossMode("lizardking", value == true)
+    end,
+}, "FarmLizardKingToggle")
+
 farmLeft:Button({
     Name = "Refresh mob list",
     Callback = function()
@@ -8191,7 +8274,7 @@ farmLeft:Slider({
 }, "FarmTweenSpeed")
 farmLeft:Paragraph({
     Header = "Target",
-    Body = "Pilih mob tertentu atau Nearest Mob. Daftar membaca workspace.FightableNPCS; radius membatasi jarak pencarian (maksimum 1000). Tekan Refresh mob list setelah daftar berubah.",
+    Body = "Pilih mob dari FightableNPCS, atau aktifkan Auto Spider Queen / Auto Lizard King. Boss dicari dari model di workspace; radius tetap membatasi jarak. Tekan Refresh mob list untuk memperbarui pilihan mob."
 })
 
 local FARM_MIN_XZ, FARM_MAX_XZ = -50, 50
