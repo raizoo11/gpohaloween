@@ -6249,6 +6249,8 @@ local Settings = {
     AutoMerchant = false, -- jalan ke Traveling Merchant & beli item pilihan
     AutoBuyRareChest = true,
     AutoBuyRaceReroll = false,
+    AutoRaceReroll = false,
+    TargetRace = "Human",
     AutoFishing = false,
     FishingBaits = {"Common Fish Bait"},
     AutoBuyBait = false,
@@ -7677,6 +7679,7 @@ UI.MacTabs = {
     Traveling = UI.MacGroup:Tab({Name = "Traveling"}),
     Fishing = UI.MacGroup:Tab({Name = "Fishing"}),
     Shop = UI.MacGroup:Tab({Name = "Shop"}),
+    Race = UI.MacGroup:Tab({Name = "Race"}),
     Drop = UI.MacGroup:Tab({Name = "Drop"}),
     Server = UI.MacGroup:Tab({Name = "Server"}),
     Webhook = UI.MacGroup:Tab({Name = "Webhook"}),
@@ -8625,6 +8628,97 @@ UI.MacSections.Traveling:Slider({
         if UI.IslandTravel.Enabled then UI.IslandTravel.stopOwnedTween() end
     end,
 }, "IslandTravelSpeed")
+
+-- ---------- Tab: Auto Race Reroll ----------
+local RaceReroll = {Running = false}
+local RACE_OPTIONS = {"Human", "Skypian", "Fishman", "Mink", "Vampire", "Cyborg", "Dullahan"}
+
+local function getCurrentRace()
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    local customization = playerGui and playerGui:FindFirstChild("Customization")
+    local main = customization and customization:FindFirstChild("Main")
+    local raceType = main and main:FindFirstChild("RaceType")
+    if not raceType then return nil end
+
+    local text
+    if raceType:IsA("TextLabel") or raceType:IsA("TextButton") then
+        text = raceType.Text
+    elseif raceType:IsA("StringValue") then
+        text = raceType.Value
+    end
+    if type(text) ~= "string" then return nil end
+
+    local normalized = text:lower()
+    for _, raceName in ipairs(RACE_OPTIONS) do
+        if normalized:find(raceName:lower(), 1, true) then
+            return raceName
+        end
+    end
+    return nil
+end
+
+local function raceStatus(text)
+    if UI.MacState.RaceRerollStatus then
+        UI.MacState.RaceRerollStatus:UpdateName("Auto Race Reroll: " .. text)
+    end
+end
+
+function RaceReroll.stop()
+    Settings.AutoRaceReroll = false
+    raceStatus("OFF")
+end
+
+function RaceReroll.start()
+    if RaceReroll.Running then return end
+    Settings.AutoRaceReroll = true
+    RaceReroll.Running = true
+    task.spawn(function()
+        while Settings.AutoRaceReroll do
+            local currentRace = getCurrentRace()
+            if currentRace == Settings.TargetRace then
+                Settings.AutoRaceReroll = false
+                raceStatus("target didapat: " .. currentRace)
+                break
+            end
+
+            local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+            local customization = playerGui and playerGui:FindFirstChild("Customization")
+            local main = customization and customization:FindFirstChild("Main")
+            local rerolls = main and main:FindFirstChild("RaceRerolls")
+            local button = rerolls and rerolls:FindFirstChild("RaceRerollButton")
+            if button and button:IsA("GuiButton") then
+                pcall(PrivateServer.press, button)
+                raceStatus("reroll... sekarang: " .. (currentRace or "belum terbaca"))
+            else
+                raceStatus("menunggu tombol RaceRerollButton")
+            end
+            task.wait(1)
+        end
+        RaceReroll.Running = false
+    end)
+end
+
+UI.MacSections.Race:Header({Name = "Auto Race Reroll"})
+UI.MacState.RaceRerollStatus = UI.MacSections.Race:Label({Text = "Auto Race Reroll: OFF"})
+UI.MacSections.Race:Dropdown({
+    Name = "Target Race",
+    Search = false,
+    Multi = false,
+    Required = true,
+    Options = RACE_OPTIONS,
+    Default = Settings.TargetRace,
+    Callback = function(value)
+        if table.find(RACE_OPTIONS, value) then Settings.TargetRace = value end
+    end,
+}, "AutoRaceTarget")
+UI.MacToggle(UI.MacSections.Race, "Auto Reroll tiap 1 detik",
+    function() return Settings.AutoRaceReroll end,
+    function(value)
+        if value then RaceReroll.start() else RaceReroll.stop() end
+    end)
+UI.MacSections.Race:Label({
+    Text = "Membaca Customization.Main.RaceType dan berhenti saat target didapat."
+})
 
 UI.MacSections.Shop:Header({Name = "Shop"})
 UI.MacInput(UI.MacSections.Shop, "Buka Chest di candy", ChestTriggerBox)
