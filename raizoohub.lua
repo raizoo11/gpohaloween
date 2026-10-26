@@ -6056,6 +6056,259 @@ end
 
 PrivateServer.load()
 
+-- GUI ringan untuk memasukkan kode saat berada di MAIN MENU.
+-- GUI utama dibuat setelah inisialisasi karakter, yang memang tidak tersedia di menu.
+if game.PlaceId == PrivateServer.MainMenuPlaceId then
+    pcall(function()
+        local oldGui = LocalPlayer:FindFirstChild("PlayerGui")
+            and LocalPlayer.PlayerGui:FindFirstChild("RaizooHub_PrivateServer")
+        if oldGui then oldGui:Destroy() end
+    end)
+
+    local menuGui = Instance.new("ScreenGui")
+    menuGui.Name = "RaizooHub_PrivateServer"
+    menuGui.ResetOnSpawn = false
+    menuGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+    local parent
+    pcall(function()
+        if typeof(gethui) == "function" then parent = gethui() end
+    end)
+    parent = parent or LocalPlayer:FindFirstChildOfClass("PlayerGui") or CoreGui
+    menuGui.Parent = parent
+
+    local panel = Instance.new("Frame")
+    panel.Name = "Panel"
+    panel.AnchorPoint = Vector2.new(0.5, 0.5)
+    panel.Position = UDim2.fromScale(0.5, 0.5)
+    panel.Size = UDim2.fromOffset(360, 270)
+    panel.BackgroundColor3 = Color3.fromRGB(24, 24, 30)
+    panel.BorderSizePixel = 0
+    panel.Parent = menuGui
+    Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 10)
+
+    local title = Instance.new("TextLabel")
+    title.BackgroundTransparency = 1
+    title.Position = UDim2.fromOffset(16, 10)
+    title.Size = UDim2.new(1, -32, 0, 28)
+    title.Font = Enum.Font.GothamBold
+    title.Text = "RaizooHub | Private Server"
+    title.TextColor3 = Color3.fromRGB(245, 245, 250)
+    title.TextSize = 16
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = panel
+
+    local codeBox = Instance.new("TextBox")
+    codeBox.Name = "PrivateCode"
+    codeBox.Position = UDim2.fromOffset(16, 48)
+    codeBox.Size = UDim2.new(1, -32, 0, 34)
+    codeBox.BackgroundColor3 = Color3.fromRGB(38, 38, 46)
+    codeBox.BorderSizePixel = 0
+    codeBox.ClearTextOnFocus = false
+    codeBox.Font = Enum.Font.Gotham
+    codeBox.PlaceholderText = "Masukkan kode private server"
+    codeBox.Text = PrivateServer.Code
+    codeBox.TextColor3 = Color3.fromRGB(245, 245, 250)
+    codeBox.PlaceholderColor3 = Color3.fromRGB(155, 155, 165)
+    codeBox.TextSize = 13
+    codeBox.Parent = panel
+    Instance.new("UICorner", codeBox).CornerRadius = UDim.new(0, 6)
+
+    local joinButton = Instance.new("TextButton")
+    joinButton.Position = UDim2.fromOffset(16, 92)
+    joinButton.Size = UDim2.new(1, -32, 0, 32)
+    joinButton.BackgroundColor3 = Color3.fromRGB(112, 86, 220)
+    joinButton.BorderSizePixel = 0
+    joinButton.Font = Enum.Font.GothamSemibold
+    joinButton.Text = "Simpan & Join First Sea"
+    joinButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    joinButton.TextSize = 13
+    joinButton.Parent = panel
+    Instance.new("UICorner", joinButton).CornerRadius = UDim.new(0, 6)
+
+    local status = Instance.new("TextLabel")
+    status.BackgroundTransparency = 1
+    status.Position = UDim2.fromOffset(16, 244)
+    status.Size = UDim2.new(1, -32, 0, 16)
+    status.Font = Enum.Font.Gotham
+    status.Text = "Tempel kode saja, bukan link lengkap."
+    status.TextColor3 = Color3.fromRGB(175, 175, 185)
+    status.TextSize = 10
+    status.TextXAlignment = Enum.TextXAlignment.Left
+    status.Parent = panel
+
+    local menuRace = {Enabled = false, Running = false, Target = "Human"}
+    local menuRaceOptions = {"Human", "Skypian", "Fishman", "Mink", "Vampire", "Cyborg", "Dullahan"}
+
+    local raceHeader = Instance.new("TextLabel")
+    raceHeader.BackgroundTransparency = 1
+    raceHeader.Position = UDim2.fromOffset(16, 132)
+    raceHeader.Size = UDim2.new(1, -32, 0, 18)
+    raceHeader.Font = Enum.Font.GothamSemibold
+    raceHeader.Text = "Auto Race Reroll"
+    raceHeader.TextColor3 = Color3.fromRGB(225, 225, 235)
+    raceHeader.TextSize = 12
+    raceHeader.TextXAlignment = Enum.TextXAlignment.Left
+    raceHeader.Parent = panel
+
+    local targetButton = Instance.new("TextButton")
+    targetButton.Position = UDim2.fromOffset(16, 153)
+    targetButton.Size = UDim2.new(1, -32, 0, 30)
+    targetButton.BackgroundColor3 = Color3.fromRGB(38, 38, 46)
+    targetButton.BorderSizePixel = 0
+    targetButton.Font = Enum.Font.Gotham
+    targetButton.Text = "Target Race: " .. menuRace.Target .. "  v"
+    targetButton.TextColor3 = Color3.fromRGB(245, 245, 250)
+    targetButton.TextSize = 12
+    targetButton.Parent = panel
+    Instance.new("UICorner", targetButton).CornerRadius = UDim.new(0, 6)
+
+    local raceOptionsFrame = Instance.new("Frame")
+    raceOptionsFrame.Name = "RaceOptions"
+    raceOptionsFrame.Position = UDim2.fromOffset(16, 185)
+    raceOptionsFrame.Size = UDim2.new(1, -32, 0, #menuRaceOptions * 24)
+    raceOptionsFrame.BackgroundColor3 = Color3.fromRGB(34, 34, 42)
+    raceOptionsFrame.BorderSizePixel = 0
+    raceOptionsFrame.Visible = false
+    raceOptionsFrame.ZIndex = 10
+    raceOptionsFrame.Parent = panel
+    Instance.new("UICorner", raceOptionsFrame).CornerRadius = UDim.new(0, 6)
+
+    local optionsLayout = Instance.new("UIListLayout")
+    optionsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    optionsLayout.Parent = raceOptionsFrame
+    for _, raceName in ipairs(menuRaceOptions) do
+        local option = Instance.new("TextButton")
+        option.Name = raceName
+        option.Size = UDim2.new(1, 0, 0, 24)
+        option.BackgroundColor3 = Color3.fromRGB(34, 34, 42)
+        option.BorderSizePixel = 0
+        option.Font = Enum.Font.Gotham
+        option.Text = raceName
+        option.TextColor3 = Color3.fromRGB(245, 245, 250)
+        option.TextSize = 11
+        option.ZIndex = 11
+        option.Parent = raceOptionsFrame
+        option.MouseButton1Click:Connect(function()
+            menuRace.Target = raceName
+            targetButton.Text = "Target Race: " .. raceName .. "  v"
+            raceOptionsFrame.Visible = false
+        end)
+    end
+    targetButton.MouseButton1Click:Connect(function()
+        raceOptionsFrame.Visible = not raceOptionsFrame.Visible
+    end)
+
+    local raceToggle = Instance.new("TextButton")
+    raceToggle.Position = UDim2.fromOffset(16, 190)
+    raceToggle.Size = UDim2.new(1, -32, 0, 30)
+    raceToggle.BackgroundColor3 = Color3.fromRGB(75, 75, 88)
+    raceToggle.BorderSizePixel = 0
+    raceToggle.Font = Enum.Font.GothamSemibold
+    raceToggle.Text = "Auto Reroll: OFF"
+    raceToggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    raceToggle.TextSize = 12
+    raceToggle.Parent = panel
+    Instance.new("UICorner", raceToggle).CornerRadius = UDim.new(0, 6)
+
+    local raceStatusLabel = Instance.new("TextLabel")
+    raceStatusLabel.BackgroundTransparency = 1
+    raceStatusLabel.Position = UDim2.fromOffset(16, 222)
+    raceStatusLabel.Size = UDim2.new(1, -32, 0, 18)
+    raceStatusLabel.Font = Enum.Font.Gotham
+    raceStatusLabel.Text = "Race: belum terbaca"
+    raceStatusLabel.TextColor3 = Color3.fromRGB(175, 175, 185)
+    raceStatusLabel.TextSize = 10
+    raceStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+    raceStatusLabel.Parent = panel
+
+    local function readMenuRace()
+        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        local customization = playerGui and playerGui:FindFirstChild("Customization")
+        local main = customization and customization:FindFirstChild("Main")
+        local raceType = main and main:FindFirstChild("RaceType")
+        if not raceType then return nil end
+
+        local text
+        if raceType:IsA("TextLabel") or raceType:IsA("TextButton") then
+            text = raceType.Text
+        elseif raceType:IsA("StringValue") then
+            text = raceType.Value
+        end
+        if type(text) ~= "string" then return nil end
+
+        local normalized = text:lower()
+        for _, raceName in ipairs(menuRaceOptions) do
+            if normalized:find(raceName:lower(), 1, true) then return raceName end
+        end
+        return nil
+    end
+
+    local function runMenuRaceReroll()
+        if menuRace.Running then return end
+        menuRace.Enabled = true
+        menuRace.Running = true
+        raceToggle.Text = "Auto Reroll: ON"
+        raceToggle.BackgroundColor3 = Color3.fromRGB(62, 145, 92)
+        task.spawn(function()
+            while menuRace.Enabled and game.PlaceId == PrivateServer.MainMenuPlaceId do
+                local currentRace = readMenuRace()
+                if currentRace == menuRace.Target then
+                    menuRace.Enabled = false
+                    raceStatusLabel.Text = "Target didapat: " .. currentRace
+                    raceStatusLabel.TextColor3 = Color3.fromRGB(150, 230, 170)
+                    raceToggle.Text = "Auto Reroll: OFF"
+                    raceToggle.BackgroundColor3 = Color3.fromRGB(75, 75, 88)
+                    break
+                end
+
+                local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+                local customization = playerGui and playerGui:FindFirstChild("Customization")
+                local main = customization and customization:FindFirstChild("Main")
+                local rerolls = main and main:FindFirstChild("RaceRerolls")
+                local button = rerolls and rerolls:FindFirstChild("RaceRerollButton")
+                if button and button:IsA("GuiButton") then
+                    pcall(PrivateServer.press, button)
+                    raceStatusLabel.Text = "Reroll... sekarang: " .. (currentRace or "belum terbaca")
+                    raceStatusLabel.TextColor3 = Color3.fromRGB(175, 175, 185)
+                else
+                    raceStatusLabel.Text = "Menunggu RaceRerollButton..."
+                    raceStatusLabel.TextColor3 = Color3.fromRGB(255, 190, 110)
+                end
+                task.wait(1)
+            end
+            menuRace.Running = false
+        end)
+    end
+
+    raceToggle.MouseButton1Click:Connect(function()
+        if menuRace.Enabled then
+            menuRace.Enabled = false
+            raceToggle.Text = "Auto Reroll: OFF"
+            raceToggle.BackgroundColor3 = Color3.fromRGB(75, 75, 88)
+            raceStatusLabel.Text = "Auto reroll dihentikan."
+        else
+            runMenuRaceReroll()
+        end
+    end)
+
+    joinButton.MouseButton1Click:Connect(function()
+        local code = codeBox.Text:match("^%s*(.-)%s*$") or ""
+        if code == "" then
+            status.Text = "Kode masih kosong."
+            status.TextColor3 = Color3.fromRGB(255, 150, 130)
+            return
+        end
+
+        PrivateServer.Code = code
+        PrivateServer.Enabled = true
+        PrivateServer.save()
+        status.Text = "Kode disimpan. Mencoba masuk ke First Sea..."
+        status.TextColor3 = Color3.fromRGB(150, 230, 170)
+        PrivateServer.runMenuLoop()
+    end)
+end
+
 -- Di MAIN MENU: cuma ngurusin join private server, script farm gak dijalankan di sini
 -- (di menu belum ada dunia game / event door).
 if game.PlaceId == PrivateServer.MainMenuPlaceId then
@@ -6151,6 +6404,8 @@ local Settings = {
     AutoMerchant = false, -- jalan ke Traveling Merchant & beli item pilihan
     AutoBuyRareChest = true,
     AutoBuyRaceReroll = false,
+    AutoRaceReroll = false,
+    TargetRace = "Human",
     AutoFishing = false,
     FishingBaits = {"Common Fish Bait"},
     AutoBuyBait = false,
@@ -7579,6 +7834,7 @@ UI.MacTabs = {
     Traveling = UI.MacGroup:Tab({Name = "Traveling"}),
     Fishing = UI.MacGroup:Tab({Name = "Fishing"}),
     Shop = UI.MacGroup:Tab({Name = "Shop"}),
+    Race = UI.MacGroup:Tab({Name = "Race"}),
     Drop = UI.MacGroup:Tab({Name = "Drop"}),
     Server = UI.MacGroup:Tab({Name = "Server"}),
     Webhook = UI.MacGroup:Tab({Name = "Webhook"}),
@@ -8527,6 +8783,97 @@ UI.MacSections.Traveling:Slider({
         if UI.IslandTravel.Enabled then UI.IslandTravel.stopOwnedTween() end
     end,
 }, "IslandTravelSpeed")
+
+-- ---------- Tab: Auto Race Reroll ----------
+local RaceReroll = {Running = false}
+local RACE_OPTIONS = {"Human", "Skypian", "Fishman", "Mink", "Vampire", "Cyborg", "Dullahan"}
+
+local function getCurrentRace()
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    local customization = playerGui and playerGui:FindFirstChild("Customization")
+    local main = customization and customization:FindFirstChild("Main")
+    local raceType = main and main:FindFirstChild("RaceType")
+    if not raceType then return nil end
+
+    local text
+    if raceType:IsA("TextLabel") or raceType:IsA("TextButton") then
+        text = raceType.Text
+    elseif raceType:IsA("StringValue") then
+        text = raceType.Value
+    end
+    if type(text) ~= "string" then return nil end
+
+    local normalized = text:lower()
+    for _, raceName in ipairs(RACE_OPTIONS) do
+        if normalized:find(raceName:lower(), 1, true) then
+            return raceName
+        end
+    end
+    return nil
+end
+
+local function raceStatus(text)
+    if UI.MacState.RaceRerollStatus then
+        UI.MacState.RaceRerollStatus:UpdateName("Auto Race Reroll: " .. text)
+    end
+end
+
+function RaceReroll.stop()
+    Settings.AutoRaceReroll = false
+    raceStatus("OFF")
+end
+
+function RaceReroll.start()
+    if RaceReroll.Running then return end
+    Settings.AutoRaceReroll = true
+    RaceReroll.Running = true
+    task.spawn(function()
+        while Settings.AutoRaceReroll do
+            local currentRace = getCurrentRace()
+            if currentRace == Settings.TargetRace then
+                Settings.AutoRaceReroll = false
+                raceStatus("target didapat: " .. currentRace)
+                break
+            end
+
+            local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+            local customization = playerGui and playerGui:FindFirstChild("Customization")
+            local main = customization and customization:FindFirstChild("Main")
+            local rerolls = main and main:FindFirstChild("RaceRerolls")
+            local button = rerolls and rerolls:FindFirstChild("RaceRerollButton")
+            if button and button:IsA("GuiButton") then
+                pcall(PrivateServer.press, button)
+                raceStatus("reroll... sekarang: " .. (currentRace or "belum terbaca"))
+            else
+                raceStatus("menunggu tombol RaceRerollButton")
+            end
+            task.wait(1)
+        end
+        RaceReroll.Running = false
+    end)
+end
+
+UI.MacSections.Race:Header({Name = "Auto Race Reroll"})
+UI.MacState.RaceRerollStatus = UI.MacSections.Race:Label({Text = "Auto Race Reroll: OFF"})
+UI.MacSections.Race:Dropdown({
+    Name = "Target Race",
+    Search = false,
+    Multi = false,
+    Required = true,
+    Options = RACE_OPTIONS,
+    Default = Settings.TargetRace,
+    Callback = function(value)
+        if table.find(RACE_OPTIONS, value) then Settings.TargetRace = value end
+    end,
+}, "AutoRaceTarget")
+UI.MacToggle(UI.MacSections.Race, "Auto Reroll tiap 1 detik",
+    function() return Settings.AutoRaceReroll end,
+    function(value)
+        if value then RaceReroll.start() else RaceReroll.stop() end
+    end)
+UI.MacSections.Race:Label({
+    Text = "Membaca Customization.Main.RaceType dan berhenti saat target didapat."
+})
 
 UI.MacSections.Shop:Header({Name = "Shop"})
 UI.MacInput(UI.MacSections.Shop, "Buka Chest di candy", ChestTriggerBox)
