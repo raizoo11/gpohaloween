@@ -1251,7 +1251,7 @@ function MacLib:Window(Settings)
 			Enum.FontWeight.Medium,
 			Enum.FontStyle.Normal
 		)
-		checkmark.Text = "âœ“"
+		checkmark.Text = "✓"
 		checkmark.TextColor3 = Color3.fromRGB(255, 255, 255)
 		checkmark.TextSize = 13
 		checkmark.TextTransparency = 1
@@ -1969,7 +1969,7 @@ function MacLib:Window(Settings)
 						end,
 						Degrees = function(sliderValue, precision)
 							local formattedValue = precision and string.format("%." .. precision .. "f", sliderValue) or tostring(sliderValue)
-							return formattedValue .. "Â°"
+							return formattedValue .. "°"
 						end,
 						Percent = function(sliderValue, precision)
 							local percentage = (sliderValue - SliderFunctions.Settings.Minimum) / (SliderFunctions.Settings.Maximum - SliderFunctions.Settings.Minimum) * 100
@@ -2486,7 +2486,7 @@ function MacLib:Window(Settings)
 					local dropdownName = Instance.new("TextLabel")
 					dropdownName.Name = "DropdownName"
 					dropdownName.FontFace = Font.new(assets.interFont)
-					dropdownName.Text = Settings.Default and (DropdownFunctions.Settings.Name .. " â€¢ " .. table.concat(Selected, ", ")) or (DropdownFunctions.Settings.Name .. "...")
+					dropdownName.Text = Settings.Default and (DropdownFunctions.Settings.Name .. " • " .. table.concat(Selected, ", ")) or (DropdownFunctions.Settings.Name .. "...")
 					dropdownName.RichText = true
 					dropdownName.TextColor3 = Color3.fromRGB(255, 255, 255)
 					dropdownName.TextSize = 13
@@ -2712,7 +2712,7 @@ function MacLib:Window(Settings)
 						end
 
 						if #Selected > 0 then
-							dropdownName.Text = DropdownFunctions.Settings.Name .. " â€¢ " .. table.concat(Selected, ", ")
+							dropdownName.Text = DropdownFunctions.Settings.Name .. " • " .. table.concat(Selected, ", ")
 						else
 							dropdownName.Text = DropdownFunctions.Settings.Name .. "..."
 						end
@@ -2804,7 +2804,7 @@ function MacLib:Window(Settings)
 						local checkmark = Instance.new("TextLabel")
 						checkmark.Name = "Checkmark"
 						checkmark.FontFace = Font.new(assets.interFont)
-						checkmark.Text = "âœ“"
+						checkmark.Text = "✓"
 						checkmark.TextColor3 = Color3.fromRGB(255, 255, 255)
 						checkmark.TextSize = 13
 						checkmark.TextTransparency = 1
@@ -4944,7 +4944,7 @@ function MacLib:Window(Settings)
 		local interactable = Instance.new("TextButton")
 		interactable.Name = "Interactable"
 		interactable.FontFace = Font.new(assets.interFont)
-		interactable.Text = "âœ“"
+		interactable.Text = "✓"
 		interactable.TextColor3 = Color3.fromRGB(255, 255, 255)
 		interactable.TextSize = 17
 		interactable.TextTransparency = 0.2
@@ -4978,7 +4978,7 @@ function MacLib:Window(Settings)
 
 		local styles = {
 			None = function() interactable:Destroy() end,
-			Confirm = function() interactable.Text = "âœ“" end,
+			Confirm = function() interactable.Text = "✓" end,
 			Cancel = function() interactable.Text = "âœ—" end
 		}
 
@@ -7122,7 +7122,7 @@ function Webhook.itemsText(totItems, winItems)
 
     local lines, len = {}, 0
     for i, it in ipairs(list) do
-        local line = string.format("â€¢ %s x%d", it.name, it.n)
+        local line = string.format("• %s x%d", it.name, it.n)
         -- (+n) = tambahan di jam terakhir (cuma ditampilin kalau sebagian lama, sebagian baru)
         if it.d > 0 and it.d < it.n then line = line .. string.format(" (+%d)", it.d) end
         if i > 15 or len + #line > 900 then
@@ -8362,60 +8362,6 @@ do
 end
 
 local FISH_TO_SELL = {"Tigerfin", "Blue-Lip Grouper", "Crimson Snapper", "Crimson Polka Puffer", "Exotic Tigerfin", "Fangfish", "Zebra Ribbon Angelfish", "Golden Ribbon Angelfish", "Golden Tigerfin", "Anglerfish", "Swordfish", "Golden Polka Puffer", "Dark Skeletal Shark", "Jack-O'-Bite", "Skeletal Shark", "Candy Corn Squid"}
-UI.MacSections.Fishing:Header({Name = "Fishing Tensen"})
-UI.MacState.FishingStatus = UI.MacSections.Fishing:Label({Text = "Fishing: nonaktif"})
-UI.MacToggle(UI.MacSections.Fishing, "Auto Fishing", function() return Settings.AutoFishing end,
-    function(value) if value then Fishing.start() else Fishing.stop() end end)
-UI.MacState.FishingBaits = UI.MacSections.Fishing:Dropdown({
-    Name = "Prioritas bait",
-    Search = false,
-    Multi = true,
-    Required = false,
-    Options = FISH_BAITS,
-    Default = Settings.FishingBaits,
-    Callback = function(value)
-        local selected = {}
-        for _, bait in ipairs(FISH_BAITS) do if value[bait] then table.insert(selected, bait) end end
-        Settings.FishingBaits = selected
-    end,
-}, "FishingBaits")
-UI.MacToggle(UI.MacSections.Fishing, "Auto Buy Common Bait", function() return Settings.AutoBuyBait end,
-    function(value) Settings.AutoBuyBait = value end)
-UI.MacSections.Fishing:Input({
-    Name = "Beli jika bait di bawah",
-    Default = tostring(Settings.BaitThreshold),
-    AcceptedCharacters = "Numeric",
-    Callback = function(value) Settings.BaitThreshold = math.max(0, tonumber(value) or 10) end,
-})
-UI.MacSections.Fishing:Input({
-    Name = "Jumlah beli",
-    Default = tostring(Settings.BaitBuyAmount),
-    AcceptedCharacters = "Numeric",
-    Callback = function(value) Settings.BaitBuyAmount = math.max(1, tonumber(value) or 10) end,
-})
-UI.MacToggle(UI.MacSections.Fishing, "Auto Craft Bait", function() return Settings.AutoCraftBait end,
-    function(value) Settings.AutoCraftBait = value end)
-UI.MacSections.Fishing:Dropdown({
-    Name = "Bait untuk di-craft",
-    Search = false,
-    Multi = true,
-    Required = false,
-    Options = FISH_BAITS,
-    Default = Settings.CraftBaits,
-    Callback = function(value)
-        local selected = {}
-        for _, bait in ipairs(FISH_BAITS) do if value[bait] then table.insert(selected, bait) end end
-        Settings.CraftBaits = selected
-    end,
-}, "CraftBaits")
-UI.MacSections.Fishing:Label({Text = "Fishing otomatis menuju spot Tensen yang dikenal. Craft bait perlu data ikan dan NPC Blacksmith Sen."})
-UI.MacToggle(UI.MacSections.Fishing, "Auto Sell Fish", function() return Settings.AutoSellFish end, function(value) Settings.AutoSellFish = value end)
-UI.MacState.FishToSell = UI.MacSections.Fishing:Dropdown({
-    Name = "Ikan untuk dijual", Search = true, Multi = true, Required = false,
-    Options = FISH_TO_SELL, Default = Settings.SelectedFish,
-    Callback = function(value) local selected = {}; for _, fish in ipairs(FISH_TO_SELL) do if value[fish] then table.insert(selected, fish) end end; Settings.SelectedFish = selected end,
-}, "SelectedFish")
-
 local Fishing = {
     Running = false,
     SessionKey = nil,
@@ -8755,7 +8701,7 @@ function Fishing.craftIfPending()
                 if not root then return false end
                 if (root.Position - npcRoot.Position).Magnitude > 20 then
                     Fishing.setStatus("menuju Blacksmith Sen")
-                    if not Travel.moveTo(CFrame.new(npcRoot.Position + npcRoot.CFrame.LookVector * 5), "Craft Bait", function()
+                    if not UI.IslandTravel.moveTo(CFrame.new(npcRoot.Position + npcRoot.CFrame.LookVector * 5), "Craft Bait", function()
                         return Settings.AutoFishing and Settings.AutoCraftBait and not Enabled
                     end) then return false end
                 end
@@ -8788,7 +8734,7 @@ function Fishing.start()
                         local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
                         if root and (root.Position - spot.Position).Magnitude > 10 then
                             Fishing.setStatus("menuju spot Tensen")
-                            Travel.moveTo(spot, "Fishing", function()
+                            UI.IslandTravel.moveTo(spot, "Fishing", function()
                                 return Settings.AutoFishing and not Enabled and not UI.IslandTravel.Enabled
                             end)
                         end
@@ -8811,6 +8757,61 @@ function Fishing.stop()
     Settings.AutoFishing = false
     Fishing.closeSession()
 end
+
+
+UI.MacSections.Fishing:Header({Name = "Fishing Tensen"})
+UI.MacState.FishingStatus = UI.MacSections.Fishing:Label({Text = "Fishing: nonaktif"})
+UI.MacToggle(UI.MacSections.Fishing, "Auto Fishing", function() return Settings.AutoFishing end,
+    function(value) if value then Fishing.start() else Fishing.stop() end end)
+UI.MacState.FishingBaits = UI.MacSections.Fishing:Dropdown({
+    Name = "Prioritas bait",
+    Search = false,
+    Multi = true,
+    Required = false,
+    Options = FISH_BAITS,
+    Default = Settings.FishingBaits,
+    Callback = function(value)
+        local selected = {}
+        for _, bait in ipairs(FISH_BAITS) do if value[bait] then table.insert(selected, bait) end end
+        Settings.FishingBaits = selected
+    end,
+}, "FishingBaits")
+UI.MacToggle(UI.MacSections.Fishing, "Auto Buy Common Bait", function() return Settings.AutoBuyBait end,
+    function(value) Settings.AutoBuyBait = value end)
+UI.MacSections.Fishing:Input({
+    Name = "Beli jika bait di bawah",
+    Default = tostring(Settings.BaitThreshold),
+    AcceptedCharacters = "Numeric",
+    Callback = function(value) Settings.BaitThreshold = math.max(0, tonumber(value) or 10) end,
+})
+UI.MacSections.Fishing:Input({
+    Name = "Jumlah beli",
+    Default = tostring(Settings.BaitBuyAmount),
+    AcceptedCharacters = "Numeric",
+    Callback = function(value) Settings.BaitBuyAmount = math.max(1, tonumber(value) or 10) end,
+})
+UI.MacToggle(UI.MacSections.Fishing, "Auto Craft Bait", function() return Settings.AutoCraftBait end,
+    function(value) Settings.AutoCraftBait = value end)
+UI.MacSections.Fishing:Dropdown({
+    Name = "Bait untuk di-craft",
+    Search = false,
+    Multi = true,
+    Required = false,
+    Options = FISH_BAITS,
+    Default = Settings.CraftBaits,
+    Callback = function(value)
+        local selected = {}
+        for _, bait in ipairs(FISH_BAITS) do if value[bait] then table.insert(selected, bait) end end
+        Settings.CraftBaits = selected
+    end,
+}, "CraftBaits")
+UI.MacSections.Fishing:Label({Text = "Fishing otomatis menuju spot Tensen yang dikenal. Craft bait perlu data ikan dan NPC Blacksmith Sen."})
+UI.MacToggle(UI.MacSections.Fishing, "Auto Sell Fish", function() return Settings.AutoSellFish end, function(value) Settings.AutoSellFish = value end)
+UI.MacState.FishToSell = UI.MacSections.Fishing:Dropdown({
+    Name = "Ikan untuk dijual", Search = true, Multi = true, Required = false,
+    Options = FISH_TO_SELL, Default = Settings.SelectedFish,
+    Callback = function(value) local selected = {}; for _, fish in ipairs(FISH_TO_SELL) do if value[fish] then table.insert(selected, fish) end end; Settings.SelectedFish = selected end,
+}, "SelectedFish")
 
 UI.MacSections.Traveling:Header({Name = "Island Travel (Tween gaya Tensen)"})
 UI.MacState.IslandTravel = UI.MacSections.Traveling:Label({Text = "Island Travel: nonaktif"})
