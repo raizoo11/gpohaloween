@@ -8885,8 +8885,7 @@ local function getMerchantToolOptions()
     if root then
         for _, item in ipairs(root:GetDescendants()) do
             -- Tools folder may contain item instances or nested item folders.
-            -- Include non-container entries and empty item folders by name.
-            if (not item:IsA("Folder") or #item:GetChildren() == 0) and not seen[item.Name] then
+            if not seen[item.Name] then
                 seen[item.Name] = true
                 table.insert(options, item.Name)
             end
@@ -10629,7 +10628,15 @@ task.spawn(function()
                 if not merchantMarker then
                     MerchantBought = false
                     MerchantFails = 0
-                elseif not MerchantBought and tick() >= MerchantRetryAt and getPeli() > 0 then
+                    if not Settings.MerchantMarkerWarned then
+                        print("[AutoEventDoor] Auto Merchant ON, tapi marker Traveling Merchant belum terdeteksi.")
+                        Settings.MerchantMarkerWarned = true
+                    end
+                else
+                    Settings.MerchantMarkerWarned = false
+                end
+
+                if merchantMarker and not MerchantBought and tick() >= MerchantRetryAt then
                     local items = getMerchantItemList()
                     if #items == 0 then
                         if not MerchantWarned then
@@ -11293,10 +11300,16 @@ local function mainLoop()
         if not merchantMarker then
             MerchantBought = false
             MerchantFails = 0
+            if Settings.AutoMerchant and not Settings.MerchantMarkerWarned then
+                print("[AutoEventDoor] Auto Merchant ON, tapi marker Traveling Merchant belum terdeteksi.")
+                Settings.MerchantMarkerWarned = true
+            end
+        else
+            Settings.MerchantMarkerWarned = false
         end
 
         if Settings.AutoMerchant and merchantMarker and not MerchantBought
-            and tick() >= MerchantRetryAt and getPeli() > 0
+            and tick() >= MerchantRetryAt
             and not Settings.MerchantWatcherRunning then
             local items = getMerchantItemList()
             if #items == 0 then
