@@ -8771,6 +8771,79 @@ function Fishing.fishOnce()
     end
 end
 
+function Fishing.getSpot()
+    if game.PlaceId == 7465136166 then
+        return CFrame.new(-6763.41016, 27.0749931, 9203.70215)
+    elseif game.PlaceId == 116480749200627 then
+        return CFrame.new(-15.0580778, 4.21153259, -1423.65332)
+    elseif game.PlaceId == 3978370137 then
+        return CFrame.new(-1343.58374, 4.12497234, -4965.4873)
+    end
+    return nil
+end
+
+
+function Fishing.buyBaitIfLow()
+    if not Settings.AutoBuyBait or not Settings.AutoFishing then return end
+    local count = Fishing.baitCount("Common Fish Bait")
+    if count == nil or count >= Settings.BaitThreshold then return end
+    local buyables = workspace:FindFirstChild("BuyableItems")
+    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not buyables or not root then return end
+    local best, bestDistance = nil, math.huge
+    for _, item in ipairs(buyables:GetChildren()) do
+        local shopPart = item:IsA("Model") and item:FindFirstChild("ShopPart")
+        if item.Name == "Common Fish Bait" and shopPart and shopPart:IsA("BasePart") then
+            local distance = (root.Position - shopPart.Position).Magnitude
+            if distance < bestDistance then best, bestDistance = item, distance end
+        end
+    end
+    if not best then return end
+    local event = ReplicatedStorage:FindFirstChild("Events")
+    local shop = event and event:FindFirstChild("Shop")
+    if shop and shop:IsA("RemoteFunction") then
+        Fishing.setStatus("membeli Common Fish Bait")
+        pcall(function() shop:InvokeServer(best, math.max(1, math.floor(Settings.BaitBuyAmount))) end)
+    end
+end
+
+
+function Fishing.rarityOf(entry)
+    if type(entry) == "string" then return entry end
+    if type(entry) == "table" then
+        if type(entry[1]) == "string" then return entry[1] end
+        return entry.Rarity or entry.rarity
+    end
+    return nil
+end
+
+function Fishing.fishRarities()
+    if fishRarityCache and tick() - fishRarityCheckedAt < 60 then return fishRarityCache end
+    fishRarityCheckedAt = tick()
+    local result, scanned = {}, 0
+    for _, module in ipairs(ReplicatedStorage:GetDescendants()) do
+        if module:IsA("ModuleScript") and module.Name:lower():find("fish", 1, true) then
+            scanned += 1
+            if scanned > 40 then break end
+            local ok, data = pcall(require, module)
+            if ok and type(data) == "table" then
+                local function walk(tbl, depth)
+                    for key, value in pairs(tbl) do
+                        if type(key) == "string" then
+                            local rarity = Fishing.rarityOf(value)
+                            if rarity == "Common" or rarity == "Rare" or rarity == "Legendary" then result[key] = rarity
+                            elseif type(value) == "table" and depth < 2 then walk(value, depth + 1) end
+                        elseif type(value) == "table" and depth < 2 then walk(value, depth + 1) end
+                    end
+                end
+                walk(data, 0)
+            end
+        end
+    end
+    if next(result) then fishRarityCache = result end
+    return fishRarityCache or {}
+end
+
 function Fishing.craftOne(bait)
     local rarity = bait:gsub(" Fish Bait", "")
     local inventory, rarityTable = Fishing.inventory(), Fishing.fishRarities()
