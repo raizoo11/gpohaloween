@@ -10597,11 +10597,11 @@ local function doMerchantTrip(marker)
         print("[AutoEventDoor] Gagal membuka shop merchant: " .. tostring(phoneErr))
         return false
     end
-    if not Enabled then return false end
+    if not Settings.AutoMerchant then return false end
 
     local bought = 0
     for _, itemName in ipairs(items) do
-        if not Enabled then break end
+        if not Settings.AutoMerchant then break end
 
         Stat.set("Beli dari merchant", itemName, "work")
         local ok, res = pcall(buyMerchantItem, itemName)
@@ -10618,6 +10618,47 @@ local function doMerchantTrip(marker)
 
     return bought > 0
 end
+
+-- Auto Merchant tetap aktif saat Farm OFF. Saat Farm ON, mainLoop yang mengelola trip.
+task.spawn(function()
+    while true do
+        if Settings.AutoMerchant and not Enabled and not Settings.MerchantWatcherRunning then
+            Settings.MerchantWatcherRunning = true
+            while Settings.AutoMerchant and not Enabled do
+                local merchantMarker = getMerchantMarker()
+                if not merchantMarker then
+                    MerchantBought = false
+                    MerchantFails = 0
+                elseif not MerchantBought and tick() >= MerchantRetryAt and getPeli() > 0
+                    and not Settings.MerchantWatcherRunning == false then
+                    local items = getMerchantItemList()
+                    if #items == 0 then
+                        if not MerchantWarned then
+                            print("[AutoEventDoor] Auto Merchant ON tapi daftar item kosong.")
+                            MerchantWarned = true
+                        end
+                    elseif MERCHANT_BUY_CONFIGURED then
+                        MerchantWarned = false
+                        local ok, bought = pcall(doMerchantTrip, merchantMarker)
+                        if ok and bought then
+                            MerchantBought = true
+                            MerchantFails = 0
+                        else
+                            MerchantFails = MerchantFails + 1
+                            MerchantRetryAt = tick() + math.min(30 * MerchantFails, 120)
+                            if not ok then
+                                print("[AutoEventDoor] Auto Merchant gagal: " .. tostring(bought))
+                            end
+                        end
+                    end
+                end
+                task.wait(0.5)
+            end
+            Settings.MerchantWatcherRunning = false
+        end
+        task.wait(0.5)
+    end
+end)
 
 -- ============ Equip Candy Corn Basket ============
 -- Basket harus ter-equip dulu sebelum nyari event door (dan CandyIndicator juga
@@ -11256,7 +11297,8 @@ local function mainLoop()
         end
 
         if Settings.AutoMerchant and merchantMarker and not MerchantBought
-            and tick() >= MerchantRetryAt and getPeli() > 0 then
+            and tick() >= MerchantRetryAt and getPeli() > 0
+            and not Settings.MerchantWatcherRunning then
             local items = getMerchantItemList()
             if #items == 0 then
                 if not MerchantWarned then
