@@ -8777,7 +8777,7 @@ function Fishing.getSpot()
     elseif game.PlaceId == 116480749200627 then
         return CFrame.new(-15.0580778, 4.21153259, -1423.65332)
     elseif game.PlaceId == 3978370137 then
-        return CFrame.new(-1344, 4, -4973)
+        return CFrame.new(-1344, 4, -4965)
     end
     return nil
 end
