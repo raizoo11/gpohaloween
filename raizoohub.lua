@@ -10486,8 +10486,8 @@ end
 -- atas script - batas Luau 200 local per scope.)
 local MERCHANT_BUY_CONFIGURED = true
 local function buyMerchantItem(itemName)
-    local STOCK_ID = 3546950141
-    local STOCK_GUID = "13a61b91-fe7a-499e-aca0-07120beb5535"
+    local STOCK_ID = 3546950143
+    local STOCK_GUID = "9a5786a1-59ac-4b09-9a17-ede954c01f56"
 
     local events = ReplicatedStorage:WaitForChild("Events", 5)
     local remote = events and events:WaitForChild("TravelingMerchentRemote", 5)
