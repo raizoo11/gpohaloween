@@ -8377,21 +8377,78 @@ end
 
 function Fishing.inventory()
     local stats = ReplicatedStorage:FindFirstChild("Stats" .. LocalPlayer.Name)
-    local inv = stats and stats:FindFirstChild("Inventory")
-    inv = inv and inv:FindFirstChild("Inventory")
-    if not inv or not inv.Value or inv.Value == "" then return nil end
-    local ok, data = pcall(function() return HttpService:JSONDecode(inv.Value) end)
-    return ok and type(data) == "table" and data or nil
+    local inventoryNode = stats and stats:FindFirstChild("Inventory")
+    if not inventoryNode then return nil end
+
+    local candidates = {}
+    local nested = inventoryNode:FindFirstChild("Inventory")
+    if nested then table.insert(candidates, nested) end
+    if inventoryNode:IsA("ValueBase") then table.insert(candidates, inventoryNode) end
+    for _, node in ipairs(candidates) do
+        local raw = node:IsA("ValueBase") and node.Value or nil
+        if type(raw) == "string" and raw ~= "" then
+            local ok, data = pcall(function() return HttpService:JSONDecode(raw) end)
+            if ok and type(data) == "table" then
+                if type(data.Inventory) == "table" then data = data.Inventory end
+                return data
+            end
+        elseif type(raw) == "table" then
+            return raw
+        end
+    end
+    return nil
 end
 
 function Fishing.amount(data, name)
-    local value = data and data[name]
-    if type(value) == "table" then value = value.Amount end
-    return tonumber(value) or 0
+    if type(data) ~= "table" then return 0 end
+    local target = tostring(name):lower():gsub("[^%w]", "")
+    local function quantity(value)
+        if type(value) == "number" or type(value) == "string" then
+            return tonumber(value)
+        elseif type(value) == "table" then
+            for _, key in ipairs({"Amount", "amount", "Count", "count", "Quantity", "quantity", "Value", "value"}) do
+                local n = tonumber(value[key])
+                if n then return n end
+            end
+        end
+        return nil
+    end
+    local function find(source, depth)
+        if type(source) ~= "table" or depth > 5 then return nil end
+        for key, value in pairs(source) do
+            if type(key) == "string" and key:lower():gsub("[^%w]", "") == target then
+                local n = quantity(value)
+                if n ~= nil then return n end
+            end
+        end
+        for _, value in pairs(source) do
+            if type(value) == "table" then
+                local n = find(value, depth + 1)
+                if n ~= nil then return n end
+            end
+        end
+        return nil
+    end
+    return find(data, 0) or 0
 end
 
 function Fishing.baitCount(name)
-    return Fishing.amount(Fishing.inventory(), name)
+    local inventory = Fishing.inventory()
+    local count = Fishing.amount(inventory, name)
+    local target = tostring(name):lower():gsub("[^%w]", "")
+    local toolCount = 0
+    for _, container in ipairs({LocalPlayer:FindFirstChildOfClass("Backpack"), LocalPlayer.Character}) do
+        if container then
+            for _, item in ipairs(container:GetChildren()) do
+                if item:IsA("Tool") and item.Name:lower():gsub("[^%w]", "") == target then
+                    toolCount = toolCount + 1
+                end
+            end
+        end
+    end
+    if toolCount > count then return toolCount end
+    if not inventory then return nil end
+    return count
 end
 
 function Fishing.selectedBait()
@@ -8403,10 +8460,10 @@ function Fishing.selectedBait()
     end
     -- Utamakan bait yang dipilih; jika stoknya kosong, cari tipe bait lain yang masih ada.
     for _, name in ipairs(FISH_BAITS) do
-        if wanted[name] and Fishing.amount(inventory, name) > 0 then return name end
+        if wanted[name] and (Fishing.baitCount(name) or 0) > 0 then return name end
     end
     for _, name in ipairs(FISH_BAITS) do
-        if Fishing.amount(inventory, name) > 0 then return name end
+        if (Fishing.baitCount(name) or 0) > 0 then return name end
     end
     for _, name in ipairs(FISH_BAITS) do if wanted[name] then return name end end
     return "Common Fish Bait"
@@ -8517,7 +8574,12 @@ end
 function Fishing.fishOnce()
     if not Fishing.equipRod() then Fishing.setStatus("fishing rod belum ada"); task.wait(1); return end
     local bait = Fishing.selectedBait()
-    if Fishing.baitCount(bait) <= 0 then
+    local baitCount = Fishing.baitCount(bait)
+    if baitCount == nil then
+        Fishing.setStatus("inventory bait belum terbaca")
+        task.wait(2)
+        return
+    elseif baitCount <= 0 then
         Fishing.setStatus("umpan habis: " .. bait)
         task.wait(2)
         return
@@ -8585,7 +8647,7 @@ end
 function Fishing.buyBaitIfLow()
     if not Settings.AutoBuyBait or not Settings.AutoFishing then return end
     local count = Fishing.baitCount("Common Fish Bait")
-    if count >= Settings.BaitThreshold then return end
+    if count == nil or count >= Settings.BaitThreshold then return end
     local buyables = workspace:FindFirstChild("BuyableItems")
     local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if not buyables or not root then return end
