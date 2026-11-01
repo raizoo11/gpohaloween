@@ -2623,7 +2623,7 @@ function MacLib:Window(Settings)
 
 						for _, v in pairs(OptionObjs) do
 							local optionText = v.NameLabel.Text:lower()
-							local isVisible = string.find(optionText, searchTerm) ~= nil
+							local isVisible = string.find(optionText, searchTerm, 1, true) ~= nil
 
 							if v.Button.Visible ~= isVisible then
 								v.Button.Visible = isVisible
