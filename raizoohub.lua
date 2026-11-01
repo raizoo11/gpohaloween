@@ -8437,12 +8437,15 @@ function Fishing.baitCount(name)
     local count = Fishing.amount(inventory, name)
     local target = tostring(name):lower():gsub("[^%w]", "")
     local toolCount = 0
-    for _, container in ipairs({LocalPlayer:FindFirstChildOfClass("Backpack"), LocalPlayer.Character}) do
-        if container then
-            for _, item in ipairs(container:GetChildren()) do
-                if item:IsA("Tool") and item.Name:lower():gsub("[^%w]", "") == target then
-                    toolCount = toolCount + 1
-                end
+    local containers = {}
+    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+    local character = LocalPlayer.Character
+    if backpack then table.insert(containers, backpack) end
+    if character then table.insert(containers, character) end
+    for _, container in ipairs(containers) do
+        for _, item in ipairs(container:GetChildren()) do
+            if item:IsA("Tool") and item.Name:lower():gsub("[^%w]", "") == target then
+                toolCount = toolCount + 1
             end
         end
     end
