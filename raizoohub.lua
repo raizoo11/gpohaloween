@@ -6413,7 +6413,7 @@ local Settings = {
     BaitBuyAmount = 10,
     AutoCraftBait = false,
     CraftBaits = {},
-    MerchantItems = "",   -- nama item, dipisah koma
+    MerchantItems = "Race Reroll",   -- item merchant yang ingin dibeli, dipisah koma
     GeppoPass = true,   -- spam skill Geppo/Sky Walk selama tween (kayak di source)
     DoorGeppo = true,       -- sampai di door: tunggu sebentar, Geppo 1x, baru fire prompt
     DoorArriveWait = 0.5,   -- detik nunggu setelah sampai di door sebelum Geppo
@@ -8881,7 +8881,7 @@ UI.MacToggle(UI.MacSections.Shop, "Auto Merchant", function() return Settings.Au
     function(value) Settings.AutoMerchant = value end)
 local function getMerchantToolOptions()
     local root = ReplicatedStorage:FindFirstChild("Tools")
-    local options, seen = {}, {}
+    local options, seen = {"Race Reroll"}, {["Race Reroll"] = true}
     if not root then return options end
     for _, item in ipairs(root:GetDescendants()) do
         if item:IsA("Tool") and not seen[item.Name] then
@@ -10489,8 +10489,8 @@ end
 -- atas script - batas Luau 200 local per scope.)
 local MERCHANT_BUY_CONFIGURED = true
 local function buyMerchantItem(itemName)
-    local STOCK_ID = 1613697448
-    local STOCK_GUID = "6a75e173-f8a5-4d9e-b989-25536ecbd53c"
+    local STOCK_ID = 3546950141
+    local STOCK_GUID = "13a61b91-fe7a-499e-aca0-07120beb5535"
 
     local events = ReplicatedStorage:WaitForChild("Events", 5)
     local remote = events and events:WaitForChild("TravelingMerchentRemote", 5)
@@ -10548,25 +10548,45 @@ local function getMerchantItemList()
     return list
 end
 
+-- Equip dan aktifkan Snail Phone satu kali untuk membuka shop merchant dari lokasi mana pun.
+local function activateMerchantPhone()
+    local character = LocalPlayer.Character
+    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+    local phoneName = "Traveling Merchant Snail Phone"
+    local phone = (character and character:FindFirstChild(phoneName))
+        or (backpack and backpack:FindFirstChild(phoneName))
+    if not phone or not phone:IsA("Tool") then
+        error("'" .. phoneName .. "' gak ketemu di Backpack/Character")
+    end
+
+    if phone.Parent ~= character then
+        local hum = character and character:FindFirstChildOfClass("Humanoid")
+        if not hum then error("Humanoid belum tersedia untuk equip Snail Phone") end
+        hum:EquipTool(phone)
+        task.wait(0.35)
+    end
+
+    local ok, err = pcall(function() phone:Activate() end)
+    if not ok then error("gagal mengaktifkan Snail Phone: " .. tostring(err)) end
+    task.wait(0.8)
+end
+
 -- Return: true kalau minimal 1 item berhasil dibeli
 local function doMerchantTrip(marker)
-    local pos = getMerchantPosition(marker)
-    if not pos then
-        print("[AutoEventDoor] Posisi Traveling Merchant gak kebaca dari marker.")
-        return false
-    end
-
     local items = getMerchantItemList()
-    print("[AutoEventDoor] Traveling Merchant muncul, jalan ke sana...")
-
-    MerchantTarget.Position = pos
-    Stat.set("Menuju Traveling Merchant", Stat.towards(function() return pos end), "move")
-    local arrived = walkToDoorHeld(MerchantTarget)
-    if not arrived or not Enabled then
+    if #items == 0 then
+        print("[AutoEventDoor] Belum ada item Traveling Merchant yang dipilih.")
         return false
     end
 
-    task.wait(1)
+    print("[AutoEventDoor] Traveling Merchant muncul, membuka shop dengan Snail Phone...")
+    Stat.set("Membuka Traveling Merchant", "equip & aktifkan Snail Phone", "work")
+    local phoneOk, phoneErr = pcall(activateMerchantPhone)
+    if not phoneOk then
+        print("[AutoEventDoor] Gagal membuka shop merchant: " .. tostring(phoneErr))
+        return false
+    end
+    if not Enabled then return false end
 
     local bought = 0
     for _, itemName in ipairs(items) do
