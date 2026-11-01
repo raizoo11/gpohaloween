@@ -10550,8 +10550,8 @@ local function getMerchantItemList()
     return list
 end
 
--- Equip dan aktifkan Snail Phone satu kali untuk membuka shop merchant dari lokasi mana pun.
-local function activateMerchantPhone()
+-- Equip Snail Phone dan tunggu sampai item pilihan terlihat di stock shop.
+local function activateMerchantPhone(items)
     local character = LocalPlayer.Character
     local backpack = LocalPlayer:FindFirstChild("Backpack")
         or LocalPlayer:FindFirstChildOfClass("Backpack")
@@ -10578,7 +10578,49 @@ local function activateMerchantPhone()
 
     local ok, err = pcall(function() phone:Activate() end)
     if not ok then error("gagal mengaktifkan Snail Phone: " .. tostring(err)) end
-    task.wait(1)
+
+    local function getVisibleStockItems()
+        local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if not playerGui then return {} end
+        local found = {}
+        for _, obj in ipairs(playerGui:GetDescendants()) do
+            if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
+                local screenGui = obj:FindFirstAncestorWhichIsA("ScreenGui")
+                local visible = screenGui ~= nil and screenGui.Enabled
+                local node = obj
+                while visible and node and node ~= playerGui do
+                    if node:IsA("GuiObject") and not node.Visible then visible = false end
+                    node = node.Parent
+                end
+                if visible then
+                    local text = (obj.Text or ""):gsub("<.->", ""):lower():match("^%s*(.-)%s*$") or ""
+                    for _, itemName in ipairs(items) do
+                        local target = itemName:lower()
+                        if text == target or text:sub(1, #target) == target
+                            or text:find("\n" .. target, 1, true) then
+                            if not table.find(found, itemName) then
+                                table.insert(found, itemName)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        return found
+    end
+
+    local deadline = tick() + 10
+    local availableItems = {}
+    repeat
+        availableItems = getVisibleStockItems()
+        if #availableItems > 0 then return availableItems end
+        task.wait(0.25)
+    until tick() >= deadline or not Settings.AutoMerchant
+
+    if #availableItems == 0 then
+        error("stock item pilihan belum terlihat setelah Snail Phone diaktifkan")
+    end
+    return availableItems
 end
 
 -- Return: true kalau minimal 1 item berhasil dibeli
@@ -10591,15 +10633,19 @@ local function doMerchantTrip(marker)
 
     print("[AutoEventDoor] Traveling Merchant muncul, membuka shop dengan Snail Phone...")
     Stat.set("Membuka Traveling Merchant", "equip & aktifkan Snail Phone", "work")
-    local phoneOk, phoneErr = pcall(activateMerchantPhone)
+    local phoneOk, availableItems = pcall(activateMerchantPhone, items)
     if not phoneOk then
-        print("[AutoEventDoor] Gagal membuka shop merchant: " .. tostring(phoneErr))
+        print("[AutoEventDoor] Gagal membuka shop merchant: " .. tostring(availableItems))
         return false
     end
     if not Settings.AutoMerchant then return false end
+    if #availableItems == 0 then
+        print("[AutoEventDoor] Item pilihan tidak terlihat di stock shop.")
+        return false
+    end
 
     local bought = 0
-    for _, itemName in ipairs(items) do
+    for _, itemName in ipairs(availableItems) do
         if not Settings.AutoMerchant then break end
 
         Stat.set("Beli dari merchant", itemName, "work")
