@@ -8600,6 +8600,68 @@ function Fishing.baitGui()
     return nil
 end
 
+function Fishing.waitGuiStable(object, maxWait)
+    local started, stableSince, lastPosition, lastSize = os.clock(), nil, nil, nil
+    while os.clock() - started < (maxWait or 2) do
+        local position, size = object.AbsolutePosition, object.AbsoluteSize
+        if lastPosition and (position - lastPosition).Magnitude < 0.5 and (size - lastSize).Magnitude < 0.5 then
+            stableSince = stableSince or os.clock()
+            if os.clock() - stableSince >= 0.3 then return true end
+        else
+            stableSince = nil
+        end
+        lastPosition, lastSize = position, size
+        task.wait(0.05)
+    end
+    return false
+end
+
+function Fishing.fireGuiButton(button)
+    if type(getconnections) == "function" then
+        for _, signalName in ipairs({"Activated", "MouseButton1Click", "MouseButton1Down"}) do
+            local ok, signal = pcall(function() return button[signalName] end)
+            if ok and signal then
+                local got, connections = pcall(getconnections, signal)
+                if got and type(connections) == "table" and #connections > 0 then
+                    for _, connection in ipairs(connections) do
+                        pcall(function()
+                            if connection.Fire then connection:Fire()
+                            elseif connection.Function then connection.Function() end
+                        end)
+                    end
+                    return true
+                end
+            end
+        end
+    end
+    if type(firesignal) == "function" then
+        for _, signalName in ipairs({"Activated", "MouseButton1Click", "MouseButton1Down"}) do
+            local ok, signal = pcall(function() return button[signalName] end)
+            if ok and signal and pcall(firesignal, signal) then return true end
+        end
+    end
+    return false
+end
+
+function Fishing.clickGuiObject(object)
+    Fishing.waitGuiStable(object)
+    local screen = object:FindFirstAncestorOfClass("ScreenGui")
+    local point = object.AbsolutePosition + object.AbsoluteSize / 2
+    local hit = LocalPlayer:FindFirstChildOfClass("PlayerGui"):GetGuiObjectsAtPosition(point.X, point.Y)
+    local top = hit[1]
+    if top and top ~= object and not top:IsDescendantOf(object) then
+        warn("[Fishing] bait click tertutup oleh " .. top:GetFullName())
+    end
+    if not (screen and screen.IgnoreGuiInset) then
+        point = point + game:GetService("GuiService"):GetGuiInset()
+    end
+    VirtualInputManager:SendMouseMoveEvent(point.X, point.Y, game)
+    task.wait(0.05)
+    VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, true, game, 0)
+    task.wait(0.05)
+    VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, false, game, 0)
+end
+
 function Fishing.selectBaitFromGui(bait)
     local started = os.clock()
     local gui
@@ -8612,18 +8674,11 @@ function Fishing.selectBaitFromGui(bait)
     local list = main and main:FindFirstChild("List")
     local item = list and list:FindFirstChild(bait)
     if not item then return false end
+
+    Fishing.waitGuiStable(item)
     local button = item:IsA("GuiButton") and item or item:FindFirstChildWhichIsA("GuiButton", true)
-    local target = button or item
-    local point = target.AbsolutePosition + target.AbsoluteSize / 2
-    local screen = target:FindFirstAncestorOfClass("ScreenGui")
-    if screen and not screen.IgnoreGuiInset then
-        point = point + game:GetService("GuiService"):GetGuiInset()
-    end
-    VirtualInputManager:SendMouseMoveEvent(point.X, point.Y, game)
-    task.wait(0.05)
-    VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, true, game, 0)
-    task.wait(0.05)
-    VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, false, game, 0)
+    if button and Fishing.fireGuiButton(button) then return true end
+    Fishing.clickGuiObject(button or item)
     return true
 end
 
