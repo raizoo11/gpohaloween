@@ -1,5 +1,3 @@
-Warning: a was declared with const; use let for reassignable variables.
-Warning: b was declared with const; use let for reassignable variables.
 local MacLib = (function()
 local MacLib = { 
 	Options = {}, 
