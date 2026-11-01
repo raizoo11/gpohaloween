@@ -8777,7 +8777,7 @@ function Fishing.getSpot()
     elseif game.PlaceId == 116480749200627 then
         return CFrame.new(-15.0580778, 4.21153259, -1423.65332)
     elseif game.PlaceId == 3978370137 then
-        return CFrame.new(-1343.58374, 4.12497234, -4965.4873)
+        return CFrame.new(-1344, 4, -4973)
     end
     return nil
 end
@@ -8936,18 +8936,33 @@ function Fishing.start()
                     task.wait(0.5)
                 else
                     local spot = Fishing.getSpot()
-                    if spot then
+                    if not spot then
+                        Fishing.setStatus("spot fishing tidak tersedia di tempat ini")
+                        task.wait(1)
+                    elseif Settings.AutoFishing and not Enabled and not UI.IslandTravel.Enabled then
                         local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                        if root and (root.Position - spot.Position).Magnitude > 10 then
-                            Fishing.setStatus("menuju spot Tensen")
-                            UI.IslandTravel.moveTo(spot, "Fishing", function()
-                                return Settings.AutoFishing and not Enabled and not UI.IslandTravel.Enabled
-                            end)
+                        if not root then
+                            Fishing.setStatus("menunggu karakter")
+                            task.wait(0.5)
+                        else
+                            local distance = (root.Position - spot.Position).Magnitude
+                            if distance > 8 then
+                                Fishing.setStatus("menuju spot fishing Tensen")
+                                local arrived = UI.IslandTravel.moveTo(spot, "Fishing", function()
+                                    return Settings.AutoFishing and not Enabled and not UI.IslandTravel.Enabled
+                                end)
+                                local currentRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                                if not arrived or not currentRoot or (currentRoot.Position - spot.Position).Magnitude > 8 then
+                                    Fishing.setStatus("belum sampai spot fishing")
+                                    task.wait(1)
+                                else
+                                    Fishing.fishOnce()
+                                end
+                            else
+                                Fishing.setStatus("sudah di spot fishing")
+                                Fishing.fishOnce()
+                            end
                         end
-                    end
-                    if Settings.AutoFishing and not Enabled and not UI.IslandTravel.Enabled then
-                        if not spot then Fishing.setStatus("tempat ini tidak ada spot Tensen; berdiri dekat air") end
-                        Fishing.fishOnce()
                     end
                 end
             end
