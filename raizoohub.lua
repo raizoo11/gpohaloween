@@ -1,3 +1,4 @@
+-- Source refresh: clean Lua header (2026-11-02)
 local MacLib = (function()
 local MacLib = { 
 	Options = {}, 
