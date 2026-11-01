@@ -6484,6 +6484,8 @@ local Settings = {
     BaitBuyAmount = 10,
     AutoCraftBait = false,
     CraftBaits = {},
+    AutoSellFish = false,
+    SelectedFish = {},
     MerchantItems = "Race Reroll",   -- item merchant yang ingin dibeli, dipisah koma
     GeppoPass = true,   -- spam skill Geppo/Sky Walk selama tween (kayak di source)
     DoorGeppo = true,       -- sampai di door: tunggu sebentar, Geppo 1x, baru fire prompt
@@ -8360,6 +8362,7 @@ do
     end
 end
 
+local FISH_TO_SELL = {"Tigerfin", "Blue-Lip Grouper", "Crimson Snapper", "Crimson Polka Puffer", "Exotic Tigerfin", "Fangfish", "Zebra Ribbon Angelfish", "Golden Ribbon Angelfish", "Golden Tigerfin", "Anglerfish", "Swordfish", "Golden Polka Puffer", "Dark Skeletal Shark", "Jack-O'-Bite", "Skeletal Shark", "Candy Corn Squid"}
 UI.MacSections.Fishing:Header({Name = "Fishing Tensen"})
 UI.MacState.FishingStatus = UI.MacSections.Fishing:Label({Text = "Fishing: nonaktif"})
 UI.MacToggle(UI.MacSections.Fishing, "Auto Fishing", function() return Settings.AutoFishing end,
@@ -8407,6 +8410,12 @@ UI.MacSections.Fishing:Dropdown({
     end,
 }, "CraftBaits")
 UI.MacSections.Fishing:Label({Text = "Fishing otomatis menuju spot Tensen yang dikenal. Craft bait perlu data ikan dan NPC Blacksmith Sen."})
+UI.MacToggle(UI.MacSections.Fishing, "Auto Sell Fish", function() return Settings.AutoSellFish end, function(value) Settings.AutoSellFish = value end)
+UI.MacState.FishToSell = UI.MacSections.Fishing:Dropdown({
+    Name = "Ikan untuk dijual", Search = true, Multi = true, Required = false,
+    Options = FISH_TO_SELL, Default = Settings.SelectedFish,
+    Callback = function(value) local selected = {}; for _, fish in ipairs(FISH_TO_SELL) do if value[fish] then table.insert(selected, fish) end end; Settings.SelectedFish = selected end,
+}, "SelectedFish")
 
 local Fishing = {
     Running = false,
@@ -10593,6 +10602,23 @@ local function getPeli()
     return tonumber(digits) or 0
 end
 
+local function sellSelectedFish()
+    if not Settings.AutoSellFish or getPeli() >= 1000000 then return end
+    local remote = ReplicatedStorage:FindFirstChild("FishingShopRemote")
+    local inventory = Fishing.inventory()
+    if not remote or not inventory then return end
+    local selected = {}
+    for _, fish in ipairs(Settings.SelectedFish or {}) do selected[fish] = true end
+    for fish in pairs(selected) do
+        if getPeli() >= 1000000 then break end
+        if Fishing.amount(inventory, fish) > 0 then
+            pcall(function() remote:InvokeServer({Fish = fish, All = false, Method = "SellFish"}) end)
+            task.wait(0.2)
+        end
+    end
+end
+
+task.spawn(function() while task.wait(1) do pcall(sellSelectedFish) end end)
 local function getMerchantItemList()
     local list = {}
     for name in string.gmatch(Settings.MerchantItems or "", "[^,]+") do
