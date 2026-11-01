@@ -8401,8 +8401,12 @@ function Fishing.selectedBait()
         if type(k) == "number" and type(v) == "string" then wanted[v] = true
         elseif type(k) == "string" and v then wanted[k] = true end
     end
+    -- Utamakan bait yang dipilih; jika stoknya kosong, cari tipe bait lain yang masih ada.
     for _, name in ipairs(FISH_BAITS) do
         if wanted[name] and Fishing.amount(inventory, name) > 0 then return name end
+    end
+    for _, name in ipairs(FISH_BAITS) do
+        if Fishing.amount(inventory, name) > 0 then return name end
     end
     for _, name in ipairs(FISH_BAITS) do if wanted[name] then return name end end
     return "Common Fish Bait"
