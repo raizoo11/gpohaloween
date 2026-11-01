@@ -8367,6 +8367,14 @@ local Fishing = {
     SessionKey = nil,
     ActionKey = nil,
     Status = nil,
+    ActiveRod = nil,
+    SelectedBait = nil,
+    MouseHeld = false,
+    LastMiniSwitch = 0,
+    MiniLastPlayer = nil,
+    MiniLastGoal = nil,
+    MiniPlayerVelocity = 0,
+    MiniGoalVelocity = 0,
 }
 local FISH_BAITS = {"Common Fish Bait", "Rare Fish Bait", "Legendary Fish Bait"}
 local fishRarityCache, fishRarityCheckedAt = nil, 0
@@ -8474,6 +8482,10 @@ end
 
 function Fishing.findRod(container)
     if not container then return nil end
+    for _, preferred in ipairs({"Devil Fruit Rod", "Merchant Banana Rod", "Fishing Rod"}) do
+        local item = container:FindFirstChild(preferred)
+        if item and item:IsA("Tool") then return item end
+    end
     for _, item in ipairs(container:GetChildren()) do
         if item:IsA("Tool") and item.Name:lower():find("rod", 1, true) then return item end
     end
@@ -8483,18 +8495,33 @@ end
 function Fishing.equipRod()
     local character = LocalPlayer.Character
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-    if not character or not humanoid then return false end
-    if Fishing.findRod(character) then return true end
+    if not character or not humanoid then return false, false end
+    local equipped = Fishing.findRod(character)
+    if equipped then
+        local fresh = Fishing.ActiveRod ~= equipped
+        Fishing.ActiveRod = equipped
+        return true, fresh
+    end
     local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
     local rod = Fishing.findRod(backpack)
-    if rod then humanoid:EquipTool(rod); task.wait(0.5); return Fishing.findRod(character) ~= nil end
+    if rod then
+        humanoid:EquipTool(rod)
+        task.wait(0.6)
+        equipped = Fishing.findRod(character)
+        local fresh = equipped ~= nil and Fishing.ActiveRod ~= equipped
+        Fishing.ActiveRod = equipped
+        return equipped ~= nil, fresh
+    end
     local tools = ReplicatedStorage:FindFirstChild("Events")
     tools = tools and tools:FindFirstChild("Tools")
     if tools and tools:IsA("RemoteFunction") then
         pcall(function() tools:InvokeServer("equip", "Fishing Rod") end)
     end
     task.wait(0.75)
-    return Fishing.findRod(character) ~= nil
+    equipped = Fishing.findRod(character)
+    local fresh = equipped ~= nil and Fishing.ActiveRod ~= equipped
+    Fishing.ActiveRod = equipped
+    return equipped ~= nil, fresh
 end
 
 function Fishing.action(action, sessionKey, actionKey, extra)
@@ -8555,162 +8582,193 @@ function Fishing.pinHook(goal)
     end)
 end
 
+function Fishing.guiShown(object, playerGui)
+    local node = object
+    while node and node ~= playerGui do
+        if node:IsA("GuiObject") and not node.Visible then return false end
+        if node:IsA("ScreenGui") and not node.Enabled then return false end
+        node = node.Parent
+    end
+    return object ~= nil
+end
+
+function Fishing.baitGui()
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    local gui = playerGui and playerGui:FindFirstChild("FishingBaitGui")
+    local main = gui and gui:FindFirstChild("Main")
+    if gui and main and Fishing.guiShown(main, playerGui) then return gui end
+    return nil
+end
+
+function Fishing.selectBaitFromGui(bait)
+    local started = os.clock()
+    local gui
+    while Settings.AutoFishing and os.clock() - started < 4 do
+        gui = Fishing.baitGui()
+        if gui then break end
+        task.wait(0.2)
+    end
+    local main = gui and gui:FindFirstChild("Main")
+    local list = main and main:FindFirstChild("List")
+    local item = list and list:FindFirstChild(bait)
+    if not item then return false end
+    local button = item:IsA("GuiButton") and item or item:FindFirstChildWhichIsA("GuiButton", true)
+    local target = button or item
+    local point = target.AbsolutePosition + target.AbsoluteSize / 2
+    local screen = target:FindFirstAncestorOfClass("ScreenGui")
+    if screen and not screen.IgnoreGuiInset then
+        point = point + game:GetService("GuiService"):GetGuiInset()
+    end
+    VirtualInputManager:SendMouseMoveEvent(point.X, point.Y, game)
+    task.wait(0.05)
+    VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, true, game, 0)
+    task.wait(0.05)
+    VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, false, game, 0)
+    return true
+end
+
+function Fishing.castByMouse()
+    local camera = workspace.CurrentCamera
+    if not camera then return false end
+    local viewport = camera.ViewportSize
+    local x, y = math.floor(viewport.X / 2), math.floor(viewport.Y * 0.38)
+    VirtualInputManager:SendMouseMoveEvent(x, y, game)
+    task.wait(0.1)
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+    task.wait(1)
+    VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    return true
+end
+
+function Fishing.minigameUI()
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    local root = playerGui and playerGui:FindFirstChild("FishingUIBill")
+    local frame = root and root:FindFirstChild("Frame")
+    local player = frame and frame:FindFirstChild("Player")
+    local goal = frame and frame:FindFirstChild("Goal")
+    if player and goal and Fishing.guiShown(player, playerGui) and Fishing.guiShown(goal, playerGui) then
+        return player, goal, frame
+    end
+    return nil
+end
+
+function Fishing.setMouseHold(want)
+    if want == Fishing.MouseHeld then return end
+    Fishing.MouseHeld = want
+    Fishing.LastMiniSwitch = os.clock()
+    local mouse = UserInputService:GetMouseLocation()
+    VirtualInputManager:SendMouseButtonEvent(mouse.X, mouse.Y, 0, want, game, 0)
+end
+
+function Fishing.releaseMouse()
+    pcall(function() Fishing.setMouseHold(false) end)
+    Fishing.MiniLastPlayer, Fishing.MiniLastGoal = nil, nil
+    Fishing.MiniPlayerVelocity, Fishing.MiniGoalVelocity = 0, 0
+end
+
+function Fishing.runMinigame(timeout)
+    local started, sawBar, missingSince = os.clock(), false, nil
+    while Settings.AutoFishing and os.clock() - started < (timeout or 90) do
+        local player, goal, frame = Fishing.minigameUI()
+        if not player or not goal then
+            Fishing.setMouseHold(false)
+            if sawBar then
+                missingSince = missingSince or os.clock()
+                if os.clock() - missingSince >= 0.4 then
+                    Fishing.releaseMouse()
+                    return true
+                end
+            end
+            RunService.RenderStepped:Wait()
+        else
+            sawBar, missingSince = true, nil
+            Fishing.setStatus("minigame bar")
+            local height = frame.AbsoluteSize.Y
+            if height > 0 then
+                local p = (player.AbsolutePosition.Y + player.AbsoluteSize.Y / 2 - frame.AbsolutePosition.Y) / height
+                local g = (goal.AbsolutePosition.Y + goal.AbsoluteSize.Y / 2 - frame.AbsolutePosition.Y) / height
+                local dt = RunService.RenderStepped:Wait()
+                if dt and dt > 0 then
+                    if Fishing.MiniLastPlayer then
+                        Fishing.MiniPlayerVelocity = Fishing.MiniPlayerVelocity * 0.6
+                            + ((p - Fishing.MiniLastPlayer) / dt) * 0.4
+                        Fishing.MiniGoalVelocity = Fishing.MiniGoalVelocity * 0.6
+                            + ((g - Fishing.MiniLastGoal) / dt) * 0.4
+                    end
+                    Fishing.MiniLastPlayer, Fishing.MiniLastGoal = p, g
+                    local pPred = p + Fishing.MiniPlayerVelocity * 0.18
+                    local gPred = g + Fishing.MiniGoalVelocity * 0.10
+                    local want
+                    if Fishing.MouseHeld then
+                        want = pPred > gPred - 0.01
+                    else
+                        want = pPred > gPred + 0.01
+                    end
+                    if want ~= Fishing.MouseHeld and os.clock() - Fishing.LastMiniSwitch >= 0.03 then
+                        Fishing.setMouseHold(want)
+                    end
+                end
+            else
+                RunService.RenderStepped:Wait()
+            end
+        end
+    end
+    Fishing.releaseMouse()
+    return sawBar
+end
+
 function Fishing.closeSession()
-    local sessionKey, actionKey = Fishing.SessionKey, Fishing.ActionKey
-    if sessionKey or actionKey then
-        for _, action in ipairs({"Reel", "HookReturning", "Cancel"}) do
-            local result = Fishing.action(action, sessionKey, actionKey)
-            if type(result) == "table" and result.ActionKey then actionKey = result.ActionKey end
-            task.wait(0.08)
-        end
-    end
+    Fishing.releaseMouse()
     Fishing.SessionKey, Fishing.ActionKey = nil, nil
-    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if root then
-        for _, name in ipairs({"Small", "Medium", "Large", "Giant"}) do
-            local sound = root:FindFirstChild(name)
-            if sound then pcall(function() sound:Destroy() end) end
-        end
-    end
 end
 
 function Fishing.fishOnce()
-    if not Fishing.equipRod() then Fishing.setStatus("fishing rod belum ada"); task.wait(1); return end
-    local bait = Fishing.selectedBait()
-    local baitCount = Fishing.baitCount(bait)
-    local baitCandidates = {bait}
-    if baitCount == nil or baitCount <= 0 then
-        -- Kalau data inventory belum sinkron, biarkan server memvalidasi bait.
-        for _, candidate in ipairs(FISH_BAITS) do
-            if candidate ~= bait then table.insert(baitCandidates, candidate) end
-        end
-    end
-    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not root then task.wait(0.5); return end
-    local goal = Fishing.castGoal(root)
-    local result
-    for _, candidate in ipairs(baitCandidates) do
-        Fishing.setStatus("mencoba " .. candidate)
-        result = Fishing.action("Throw", nil, nil, {Goal = goal, Bait = candidate})
-        if type(result) == "table" and result.Accepted == true then
-            bait = candidate
-            break
-        end
-    end
-    if type(result) ~= "table" or result.Accepted ~= true then
-        local reason = type(result) == "table" and (result.Message or result.Error) or nil
-        Fishing.setStatus(reason and ("server menolak bait: " .. tostring(reason)) or "server menolak semua jenis bait")
+    local ready, freshRod = Fishing.equipRod()
+    if not ready then
+        Fishing.setStatus("tidak ada fishing rod")
         task.wait(1)
         return
     end
 
-    Fishing.SessionKey, Fishing.ActionKey = result.SessionKey, result.ActionKey
-    Fishing.pinHook(goal)
-    local landed = false
-    for _ = 1, 5 do
-        if not Settings.AutoFishing then break end
-        local response = Fishing.action("Landed", Fishing.SessionKey, Fishing.ActionKey)
-        if type(response) == "table" then
-            if response.ActionKey then Fishing.ActionKey = response.ActionKey end
-            if response.Accepted == true then landed = true; break end
+    local bait = Fishing.selectedBait()
+    if freshRod or Fishing.SelectedBait ~= bait then
+        Fishing.setStatus("menunggu GUI bait")
+        local selected = Fishing.selectBaitFromGui(bait)
+        if selected then
+            Fishing.SelectedBait = bait
+            task.wait(0.4)
+        else
+            -- Seperti contoh: jika GUI tidak muncul, lanjut lempar dengan pilihan game saat ini.
+            Fishing.setStatus("GUI bait tidak muncul; mencoba lempar")
+            Fishing.SelectedBait = bait
+            task.wait(0.2)
         end
-        if Fishing.soundOn(root) then landed = true; break end
-        task.wait(0.2)
     end
-    if not landed then Fishing.closeSession(); Fishing.setStatus("gagal mendaratkan kail"); task.wait(0.5); return end
+
+    if not Settings.AutoFishing then return end
+    Fishing.setStatus("melempar kail")
+    if not Fishing.castByMouse() then task.wait(0.5); return end
 
     Fishing.setStatus("menunggu ikan")
-    local started = tick()
-    while Settings.AutoFishing and tick() - started < 45 and not Fishing.soundOn(root) do task.wait(0.2) end
-    if not Settings.AutoFishing then Fishing.closeSession(); return end
-    if not Fishing.soundOn(root) then Fishing.closeSession(); Fishing.setStatus("lemparan kedaluwarsa"); return end
+    local started = os.clock()
+    while Settings.AutoFishing and os.clock() - started < 30 and not Fishing.minigameUI() do
+        task.wait(0.2)
+    end
+    if not Settings.AutoFishing then Fishing.releaseMouse(); return end
+    if not Fishing.minigameUI() then
+        Fishing.setStatus("belum ada gigitan; lempar ulang")
+        task.wait(0.5)
+        return
+    end
 
-    Fishing.setStatus("menarik ikan")
-    local biteAt = tick()
-    while Settings.AutoFishing and tick() - biteAt < 8 do task.wait(0.2) end
-    local reelAt = tick()
-    while Settings.AutoFishing and Fishing.soundOn(root) and tick() - reelAt < 5 do
-        local response = Fishing.action("Reel", Fishing.SessionKey, Fishing.ActionKey)
-        if type(response) == "table" and response.ActionKey then Fishing.ActionKey = response.ActionKey end
-        task.wait(0.1)
+    local caught = Fishing.runMinigame(90)
+    if caught then
+        Fishing.setStatus("ikan didapat")
+        task.wait(2.5)
+    else
+        Fishing.setStatus("minigame selesai / waktu habis")
+        task.wait(0.5)
     end
-    local returning = Fishing.action("HookReturning", Fishing.SessionKey, Fishing.ActionKey)
-    if type(returning) == "table" and returning.ActionKey then Fishing.ActionKey = returning.ActionKey end
-    Fishing.action("Cancel", Fishing.SessionKey, Fishing.ActionKey)
-    Fishing.SessionKey, Fishing.ActionKey = nil, nil
-    Fishing.setStatus("siap cast berikutnya")
-    task.wait(0.3)
-end
-
-function Fishing.getSpot()
-    if game.PlaceId == 7465136166 then
-        return CFrame.new(-6763.41016, 27.0749931, 9203.70215)
-    elseif game.PlaceId == 116480749200627 then
-        return CFrame.new(-15.0580778, 4.21153259, -1423.65332)
-    elseif game.PlaceId == 3978370137 then
-        return CFrame.new(-1343.58374, 4.12497234, -4965.4873)
-    end
-    return nil
-end
-
-function Fishing.buyBaitIfLow()
-    if not Settings.AutoBuyBait or not Settings.AutoFishing then return end
-    local count = Fishing.baitCount("Common Fish Bait")
-    if count == nil or count >= Settings.BaitThreshold then return end
-    local buyables = workspace:FindFirstChild("BuyableItems")
-    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not buyables or not root then return end
-    local best, bestDistance = nil, math.huge
-    for _, item in ipairs(buyables:GetChildren()) do
-        local shopPart = item:IsA("Model") and item:FindFirstChild("ShopPart")
-        if item.Name == "Common Fish Bait" and shopPart and shopPart:IsA("BasePart") then
-            local distance = (root.Position - shopPart.Position).Magnitude
-            if distance < bestDistance then best, bestDistance = item, distance end
-        end
-    end
-    if not best then return end
-    local event = ReplicatedStorage:FindFirstChild("Events")
-    local shop = event and event:FindFirstChild("Shop")
-    if shop and shop:IsA("RemoteFunction") then
-        Fishing.setStatus("membeli Common Fish Bait")
-        pcall(function() shop:InvokeServer(best, math.max(1, math.floor(Settings.BaitBuyAmount))) end)
-    end
-end
-
-function Fishing.rarityOf(entry)
-    if type(entry) == "string" then return entry end
-    if type(entry) == "table" then
-        if type(entry[1]) == "string" then return entry[1] end
-        return entry.Rarity or entry.rarity
-    end
-    return nil
-end
-
-function Fishing.fishRarities()
-    if fishRarityCache and tick() - fishRarityCheckedAt < 60 then return fishRarityCache end
-    fishRarityCheckedAt = tick()
-    local result, scanned = {}, 0
-    for _, module in ipairs(ReplicatedStorage:GetDescendants()) do
-        if module:IsA("ModuleScript") and module.Name:lower():find("fish", 1, true) then
-            scanned += 1
-            if scanned > 40 then break end
-            local ok, data = pcall(require, module)
-            if ok and type(data) == "table" then
-                local function walk(tbl, depth)
-                    for key, value in pairs(tbl) do
-                        if type(key) == "string" then
-                            local rarity = Fishing.rarityOf(value)
-                            if rarity == "Common" or rarity == "Rare" or rarity == "Legendary" then result[key] = rarity
-                            elseif type(value) == "table" and depth < 2 then walk(value, depth + 1) end
-                        elseif type(value) == "table" and depth < 2 then walk(value, depth + 1) end
-                    end
-                end
-                walk(data, 0)
-            end
-        end
-    end
-    if next(result) then fishRarityCache = result end
-    return fishRarityCache or {}
 end
 
 function Fishing.craftOne(bait)
