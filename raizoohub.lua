@@ -1,3 +1,5 @@
+Warning: a was declared with const; use let for reassignable variables.
+Warning: b was declared with const; use let for reassignable variables.
 local MacLib = (function()
 local MacLib = { 
 	Options = {}, 
@@ -4645,6 +4647,7 @@ function MacLib:Window(Settings)
 
 				local inputPath = nil
 				local selectedConfig = nil
+				local autoloadLabel
 
 				configSection:Input({
 					Name = "Config Name",
@@ -4680,8 +4683,9 @@ function MacLib:Window(Settings)
 						if not success then
 							WindowFunctions:Notify({
 								Title = "Interface",
-								Description = "Unable to save config, return error: " .. returned
+								Description = "Unable to save config, return error: " .. tostring(returned)
 							})
+							return
 						end
 
 						WindowFunctions:Notify({
@@ -4691,13 +4695,16 @@ function MacLib:Window(Settings)
 
 						configSelection:ClearOptions()
 						configSelection:InsertOptions(MacLib:RefreshConfigList())
+						local configName = inputPath:match("^%s*(.-)%s*$"):gsub("%.json$", "")
+						configSelection:UpdateSelection(configName)
 					end,
 				})
 
 				configSection:Button({
 					Name = "Load Config",
 					Callback = function()
-						local success, returned = MacLib:LoadConfig(configSelection.Value)
+						local name = selectedConfig or configSelection.Value
+						local success, returned = MacLib:LoadConfig(name)
 						if not success then
 							WindowFunctions:Notify({
 								Title = "Interface",
@@ -4708,26 +4715,27 @@ function MacLib:Window(Settings)
 
 						WindowFunctions:Notify({
 							Title = "Interface",
-							Description = string.format("Loaded config %q", configSelection.Value),
+							Description = string.format("Loaded config %q", name),
 						})
 					end,
 				})
 
 				configSection:Button({
-					Name = "Overwrite Config",
+					Name = "Save Config",
 					Callback = function()
-						local success, returned = MacLib:SaveConfig(configSelection.Value)
+						local name = selectedConfig or configSelection.Value
+						local success, returned = MacLib:SaveConfig(name)
 						if not success then
 							WindowFunctions:Notify({
 								Title = "Interface",
-								Description = "Unable to overwrite config, return error: " .. returned
+								Description = "Unable to save config, return error: " .. tostring(returned)
 							})
 							return
 						end
 
 						WindowFunctions:Notify({
 							Title = "Interface",
-							Description = string.format("Overwrote config %q", configSelection.Value),
+							Description = string.format("Saved config %q", name),
 						})
 					end,
 				})
@@ -4735,18 +4743,57 @@ function MacLib:Window(Settings)
 				configSection:Button({
 					Name = "Refresh Config List",
 					Callback = function()
+						selectedConfig = nil
+						configSelection.Value = nil
 						configSelection:ClearOptions()
 						configSelection:InsertOptions(MacLib:RefreshConfigList())
 					end,
 				})
 
-				local autoloadLabel
+				configSection:Button({
+					Name = "Delete Config",
+					Callback = function()
+						local name = selectedConfig or configSelection.Value
+						local success, returned = MacLib:DeleteConfig(name)
+						if not success then
+							WindowFunctions:Notify({
+								Title = "Interface",
+								Description = "Unable to delete config: " .. tostring(returned)
+							})
+							return
+						end
+						if isfile and readfile and delfile and isfile(MacLib.Folder .. "/settings/autoload.txt") then
+							local ok, autoloadName = pcall(readfile, MacLib.Folder .. "/settings/autoload.txt")
+							if ok and autoloadName == name then
+								pcall(delfile, MacLib.Folder .. "/settings/autoload.txt")
+								autoloadLabel:UpdateName("Autoload config: None")
+							end
+						end
+						selectedConfig = nil
+						configSelection.Value = nil
+						configSelection:ClearOptions()
+						configSelection:InsertOptions(MacLib:RefreshConfigList())
+						WindowFunctions:Notify({Title = "Interface", Description = string.format("Deleted config %q", name)})
+					end,
+				})
 
 				configSection:Button({
-					Name = "Set as autoload",
+					Name = "Set Autoload Config",
 					Callback = function()
-						local name = configSelection.Value
-						writefile(MacLib.Folder .. "/settings/autoload.txt", name)
+						local name = selectedConfig or configSelection.Value
+						if not name then
+							WindowFunctions:Notify({Title = "Interface", Description = "Pilih config dulu."})
+							return
+						end
+						if not isfile or not isfile(MacLib.Folder .. "/settings/" .. name .. ".json") then
+							WindowFunctions:Notify({Title = "Interface", Description = "Config yang dipilih tidak ditemukan."})
+							return
+						end
+						local ok, err = pcall(writefile, MacLib.Folder .. "/settings/autoload.txt", name)
+						if not ok then
+							WindowFunctions:Notify({Title = "Interface", Description = "Gagal menyimpan autoload: " .. tostring(err)})
+							return
+						end
 						autoloadLabel:UpdateName("Autoload config: " .. name)
 						WindowFunctions:Notify({
 							Title = "Interface",
@@ -4757,9 +4804,9 @@ function MacLib:Window(Settings)
 
 				autoloadLabel = configSection:Label({Text = "Autoload config: None"})
 
-				if isfile(MacLib.Folder .. "/settings/autoload.txt") then
-					local name = readfile(MacLib.Folder .. "/settings/autoload.txt")
-					autoloadLabel:UpdateName("Autoload config: " .. name)
+				if isfile and readfile and isfile(MacLib.Folder .. "/settings/autoload.txt") then
+					local ok, name = pcall(readfile, MacLib.Folder .. "/settings/autoload.txt")
+					if ok and name ~= "" then autoloadLabel:UpdateName("Autoload config: " .. name) end
 				end
 			end
 
@@ -5474,6 +5521,16 @@ function MacLib:Window(Settings)
 		}
 	}
 
+	local function NormalizeConfigName(Path)
+		if type(Path) ~= "string" then return nil end
+		local name = Path:match("^%s*(.-)%s*$")
+		name = name:gsub("%.json$", "")
+		if name == "" or name == "." or name == ".." or name:find("[/\\:]", 1) then
+			return nil
+		end
+		return name
+	end
+
 	local function BuildFolderTree()
 		if isStudio or not (isfolder and makefolder) then return "Config system unavailable." end
 
@@ -5494,14 +5551,16 @@ function MacLib:Window(Settings)
 		if isStudio or not (isfile and readfile) then return "Config system unavailable." end
 
 		if isfile(MacLib.Folder .. "/settings/autoload.txt") then
-			local name = readfile(MacLib.Folder .. "/settings/autoload.txt")
+			local readOk, name = pcall(readfile, MacLib.Folder .. "/settings/autoload.txt")
+			if not readOk then return false, tostring(name) end
 
 			local suc, err = MacLib:LoadConfig(name)
 			if not suc then
 				WindowFunctions:Notify({
 					Title = "Interface",
-					Description = "Error loading autoload config: " .. err
+				Description = "Error loading autoload config: " .. tostring(err)
 				})
+				return false, err
 			end
 
 			WindowFunctions:Notify({
@@ -5519,13 +5578,11 @@ function MacLib:Window(Settings)
 	end
 
 	function MacLib:SaveConfig(Path)
-		if isStudio or not writefile then return "Config system unavailable." end
-
-		if (not Path) then
-			return false, "Please select a config file."
-		end
-
-		local fullPath = MacLib.Folder .. "/settings/" .. Path .. ".json"
+		if isStudio or type(writefile) ~= "function" then return false, "Config system unavailable." end
+		local name = NormalizeConfigName(Path)
+		if not name then return false, "Config name is empty or contains invalid path characters." end
+		BuildFolderTree()
+		local fullPath = MacLib.Folder .. "/settings/" .. name .. ".json"
 
 		local data = {
 			objects = {}
@@ -5543,31 +5600,45 @@ function MacLib:Window(Settings)
 			return false, "Unable to encode into JSON data"
 		end
 
-		writefile(fullPath, encoded)
+		local saved, saveError = pcall(writefile, fullPath, encoded)
+		if not saved then return false, tostring(saveError) end
 		return true
 	end
 
 	function MacLib:LoadConfig(Path)
-		if isStudio or not (isfile and readfile) then return "Config system unavailable." end
-
-		if (not Path) then
-			return false, "Please select a config file."
-		end
-
-		local file = MacLib.Folder .. "/settings/" .. Path .. ".json"
+		if isStudio or not (isfile and readfile) then return false, "Config system unavailable." end
+		local name = NormalizeConfigName(Path)
+		if not name then return false, "Please select a valid config file." end
+		local file = MacLib.Folder .. "/settings/" .. name .. ".json"
 		if not isfile(file) then return false, "Invalid file" end
 
-		local success, decoded = pcall(HttpService.JSONDecode, HttpService, readfile(file))
+		local readOk, contents = pcall(readfile, file)
+		if not readOk then return false, tostring(contents) end
+		local success, decoded = pcall(HttpService.JSONDecode, HttpService, contents)
 		if not success then return false, "Unable to decode JSON data." end
+		if type(decoded) ~= "table" or type(decoded.objects) ~= "table" then
+			return false, "Invalid config structure."
+		end
 
 		for _, option in next, decoded.objects do
-			if ClassParser[option.type] then
+			if type(option) == "table" and ClassParser[option.type] then
 				task.spawn(function() 
 					ClassParser[option.type].Load(option.flag, option) 
 				end)
 			end
 		end
 
+		return true
+	end
+
+	function MacLib:DeleteConfig(Path)
+		if isStudio or not (isfile and delfile) then return false, "Config delete is unavailable in this environment." end
+		local name = NormalizeConfigName(Path)
+		if not name then return false, "Please select a valid config file." end
+		local file = MacLib.Folder .. "/settings/" .. name .. ".json"
+		if not isfile(file) then return false, "Config file not found." end
+		local deleted, deleteError = pcall(delfile, file)
+		if not deleted then return false, tostring(deleteError) end
 		return true
 	end
 
