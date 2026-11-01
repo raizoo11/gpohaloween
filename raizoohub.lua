@@ -8127,10 +8127,10 @@ do
         end
 
         Travel.Tween = motion
-        motion.geppoActive = true
+        motion.geppoActive = Settings.GeppoPass == true
         task.spawn(function()
             while motion.geppoActive and not motion.finished and Travel.Tween == motion do
-                if motion.climb and fireGeppoOnce then fireGeppoOnce() end
+                if fireGeppoOnce then fireGeppoOnce() end
                 task.wait(math.random(5, 7) / 10)
             end
         end)
