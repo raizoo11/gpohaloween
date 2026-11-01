@@ -8578,22 +8578,28 @@ function Fishing.fishOnce()
     if not Fishing.equipRod() then Fishing.setStatus("fishing rod belum ada"); task.wait(1); return end
     local bait = Fishing.selectedBait()
     local baitCount = Fishing.baitCount(bait)
-    if baitCount == nil then
-        Fishing.setStatus("inventory bait belum terbaca")
-        task.wait(2)
-        return
-    elseif baitCount <= 0 then
-        Fishing.setStatus("umpan habis: " .. bait)
-        task.wait(2)
-        return
+    local baitCandidates = {bait}
+    if baitCount == nil or baitCount <= 0 then
+        -- Kalau data inventory belum sinkron, biarkan server memvalidasi bait.
+        for _, candidate in ipairs(FISH_BAITS) do
+            if candidate ~= bait then table.insert(baitCandidates, candidate) end
+        end
     end
     local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if not root then task.wait(0.5); return end
     local goal = Fishing.castGoal(root)
-    Fishing.setStatus("melempar " .. bait)
-    local result = Fishing.action("Throw", nil, nil, {Goal = goal, Bait = bait})
+    local result
+    for _, candidate in ipairs(baitCandidates) do
+        Fishing.setStatus("mencoba " .. candidate)
+        result = Fishing.action("Throw", nil, nil, {Goal = goal, Bait = candidate})
+        if type(result) == "table" and result.Accepted == true then
+            bait = candidate
+            break
+        end
+    end
     if type(result) ~= "table" or result.Accepted ~= true then
-        Fishing.setStatus("lemparan ditolak server")
+        local reason = type(result) == "table" and (result.Message or result.Error) or nil
+        Fishing.setStatus(reason and ("server menolak bait: " .. tostring(reason)) or "server menolak semua jenis bait")
         task.wait(1)
         return
     end
