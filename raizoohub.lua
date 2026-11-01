@@ -10629,8 +10629,7 @@ task.spawn(function()
                 if not merchantMarker then
                     MerchantBought = false
                     MerchantFails = 0
-                elseif not MerchantBought and tick() >= MerchantRetryAt and getPeli() > 0
-                    and not Settings.MerchantWatcherRunning == false then
+                elseif not MerchantBought and tick() >= MerchantRetryAt and getPeli() > 0 then
                     local items = getMerchantItemList()
                     if #items == 0 then
                         if not MerchantWarned then
