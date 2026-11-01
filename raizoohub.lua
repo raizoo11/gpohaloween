@@ -8881,21 +8881,19 @@ UI.MacToggle(UI.MacSections.Shop, "Auto Merchant", function() return Settings.Au
     function(value) Settings.AutoMerchant = value end)
 local function getMerchantToolOptions()
     local root = ReplicatedStorage:FindFirstChild("Tools")
-    local options, seen = {"Race Reroll"}, {["Race Reroll"] = true}
-    if not root then return options end
-    for _, item in ipairs(root:GetDescendants()) do
-        if item:IsA("Tool") and not seen[item.Name] then
-            seen[item.Name] = true
-            table.insert(options, item.Name)
-        end
-    end
-    if #options == 0 then
-        for _, item in ipairs(root:GetChildren()) do
-            if not item:IsA("Folder") and not seen[item.Name] then
+    local options, seen = {}, {}
+    if root then
+        for _, item in ipairs(root:GetDescendants()) do
+            -- Tools folder may contain item instances or nested item folders.
+            -- Include non-container entries and empty item folders by name.
+            if (not item:IsA("Folder") or #item:GetChildren() == 0) and not seen[item.Name] then
                 seen[item.Name] = true
                 table.insert(options, item.Name)
             end
         end
+    end
+    if not seen["Race Reroll"] then
+        table.insert(options, "Race Reroll")
     end
     table.sort(options)
     return options
@@ -10517,7 +10515,12 @@ MerchantTarget.Parent = workspace
 
 local function getMerchantMarker()
     local compassGuider = ReplicatedStorage:FindFirstChild("CompassGuider")
-    return compassGuider and compassGuider:FindFirstChild("Traveling Merchant")
+    local marker = compassGuider and compassGuider:FindFirstChild("Traveling Merchant")
+    if marker then return marker end
+
+    -- Fallback when the compass marker is not replicated in this server.
+    local npcs = workspace:FindFirstChild("NPCs", true)
+    return npcs and npcs:FindFirstChild("Traveling Merchant")
 end
 
 local function getMerchantPosition(marker)
@@ -10551,24 +10554,32 @@ end
 -- Equip dan aktifkan Snail Phone satu kali untuk membuka shop merchant dari lokasi mana pun.
 local function activateMerchantPhone()
     local character = LocalPlayer.Character
-    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+        or LocalPlayer:FindFirstChildOfClass("Backpack")
     local phoneName = "Traveling Merchant Snail Phone"
     local phone = (character and character:FindFirstChild(phoneName))
         or (backpack and backpack:FindFirstChild(phoneName))
     if not phone or not phone:IsA("Tool") then
         error("'" .. phoneName .. "' gak ketemu di Backpack/Character")
     end
+    if not character then error("Character belum tersedia untuk equip Snail Phone") end
 
     if phone.Parent ~= character then
-        local hum = character and character:FindFirstChildOfClass("Humanoid")
+        local hum = character:FindFirstChildOfClass("Humanoid")
         if not hum then error("Humanoid belum tersedia untuk equip Snail Phone") end
         hum:EquipTool(phone)
-        task.wait(0.35)
+        local deadline = tick() + 3
+        while phone.Parent ~= character and tick() < deadline do
+            task.wait(0.1)
+        end
+        if phone.Parent ~= character then
+            error("Snail Phone tidak berhasil ter-equip")
+        end
     end
 
     local ok, err = pcall(function() phone:Activate() end)
     if not ok then error("gagal mengaktifkan Snail Phone: " .. tostring(err)) end
-    task.wait(0.8)
+    task.wait(1)
 end
 
 -- Return: true kalau minimal 1 item berhasil dibeli
