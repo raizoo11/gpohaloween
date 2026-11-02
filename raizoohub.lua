@@ -7911,11 +7911,15 @@ UI.MacTabs = {
     Drop = UI.MacGroup:Tab({Name = "Drop"}),
     Server = UI.MacGroup:Tab({Name = "Server"}),
     Webhook = UI.MacGroup:Tab({Name = "Webhook"}),
+    Settings = UI.MacGroup:Tab({Name = "Settings"}),
 }
 UI.MacSections = {}
 for name, tab in pairs(UI.MacTabs) do
-    UI.MacSections[name] = tab:Section({Side = "Left"})
+    if name ~= "Settings" then
+        UI.MacSections[name] = tab:Section({Side = "Left"})
+    end
 end
+UI.MacTabs.Settings:InsertConfigSection("Left")
 function UI.MacInput(section, name, box, placeholder)
     return section:Input({
         Name = name,
