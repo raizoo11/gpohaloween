@@ -10905,97 +10905,38 @@ local function getMerchantItemList()
     return list
 end
 
-function PrivateServer.isMerchantGuiVisible(obj, playerGui)
-    local node = obj
-    while node and node ~= playerGui do
-        if node:IsA("GuiObject") and not node.Visible then return false end
-        if node:IsA("ScreenGui") and not node.Enabled then return false end
-        node = node.Parent
+-- Gunakan alur pembelian merchant dari script contoh; klik kartu shop akan
+-- memunculkan ConfirmationPrompt "Purchase ...?" yang tidak dipakai Tensen.
+function PrivateServer.buyMerchantItem(itemName)
+    -- Nilai stock/session dari script pengguna; dapat berubah setelah restock.
+    local STOCK_ID = 1613697448
+    local STOCK_GUID = "6a75e173-f8a5-4d9e-b989-25536ecbd53c"
+    local events = ReplicatedStorage:WaitForChild("Events", 5)
+    local remote = events and events:WaitForChild("TravelingMerchentRemote", 5)
+    if not remote or not remote:IsA("RemoteFunction") then
+        error("Events.TravelingMerchentRemote gak ketemu atau bukan RemoteFunction")
     end
-    return node == playerGui
-end
-
-function PrivateServer.findMerchantCardButton(itemName)
-    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if not playerGui then return nil end
-    for _, obj in ipairs(playerGui:GetDescendants()) do
-        if obj.Name == itemName then
-            local main = obj:FindFirstChild("Main")
-            local button = main and main:FindFirstChild("Button")
-            if button and button:IsA("GuiButton")
-                and PrivateServer.isMerchantGuiVisible(button, playerGui) then
-                return button
-            end
-        end
-    end
-    return nil
-end
-
-function PrivateServer.findMerchantConfirmation(itemName)
-    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    local prompt = playerGui and playerGui:FindFirstChild("ConfirmationPrompt")
-    local main = prompt and prompt:FindFirstChild("Main")
-    local options = main and main:FindFirstChild("OptionsFrame")
-    local accept = options and options:FindFirstChild("Accept")
-    local decline = options and options:FindFirstChild("Decline")
-    if not accept or not PrivateServer.isMerchantGuiVisible(accept, playerGui) then
-        return nil, decline, ""
-    end
-
-    local texts = {}
-    for _, obj in ipairs(main:GetDescendants()) do
-        if (obj:IsA("TextLabel") or obj:IsA("TextButton")) and obj.Text ~= ""
-            and PrivateServer.isMerchantGuiVisible(obj, playerGui) then
-            table.insert(texts, obj.Text:gsub("<.->", ""))
-        end
-    end
-    local promptText = table.concat(texts, " "):lower()
-    if not promptText:find(itemName:lower(), 1, true) then
-        return nil, decline, promptText
-    end
-    return accept, decline, promptText
-end
-
-function PrivateServer.buyMerchantItemViaUi(itemName)
-    local button = PrivateServer.findMerchantCardButton(itemName)
-    if not button then
-        return false, "kartu item '" .. itemName .. "' atau Main.Button tidak ditemukan"
-    end
-
     local peliBefore = getPeli()
-    PrivateServer.press(button)
-
-    local deadline = tick() + 5
-    local accept, decline, promptText
-    repeat
-        accept, decline, promptText = PrivateServer.findMerchantConfirmation(itemName)
-        if accept then break end
-        task.wait(0.1)
-    until tick() >= deadline
-
-    if not accept then
-        if decline and PrivateServer.isMerchantGuiVisible(decline, LocalPlayer:FindFirstChildOfClass("PlayerGui")) then
-            PrivateServer.press(decline)
-        end
-        return false, "konfirmasi untuk '" .. itemName .. "' tidak ditemukan; teks: " .. tostring(promptText)
+    local response = remote:InvokeServer(itemName, STOCK_ID, STOCK_GUID)
+    if response == false or (type(response) == "table"
+        and (response.Success == false or response.Accepted == false)) then
+        return false, "server menolak pembelian: " .. tostring(response)
     end
 
-    PrivateServer.press(accept)
-    deadline = tick() + 5
-    repeat
-        local currentAccept = PrivateServer.findMerchantConfirmation(itemName)
-        if not currentAccept then break end
-        task.wait(0.1)
-    until tick() >= deadline
-
-    task.wait(0.5)
-    local peliAfter = getPeli()
-    if peliBefore > 0 and peliAfter < peliBefore then
-        return true, "Peli " .. tostring(peliBefore) .. " -> " .. tostring(peliAfter)
+    -- Pastikan server menyelesaikan transaksi jika saldo Peli tersedia di HUD.
+    if peliBefore > 0 then
+        local deadline = tick() + 3
+        repeat
+            task.wait(0.1)
+            local peliAfter = getPeli()
+            if peliAfter < peliBefore then
+                return true, "Peli " .. tostring(peliBefore) .. " -> " .. tostring(peliAfter)
+            end
+        until tick() >= deadline
+        return false, "Peli tidak berkurang; STOCK_ID/GUID mungkin berubah setelah restock"
     end
-    return false, "prompt diterima tetapi saldo Peli tidak berkurang (" .. tostring(peliBefore) .. " -> " .. tostring(peliAfter) .. ")"
+    return true, tostring(response)
 end
-
 -- Equip Snail Phone dan tunggu sampai item pilihan terlihat di stock shop.
 local function activateMerchantPhone(items)
     local character = LocalPlayer.Character
@@ -11095,7 +11036,7 @@ local function doMerchantTrip(marker)
         if not Settings.AutoMerchant then break end
 
         Stat.set("Beli dari merchant", itemName, "work")
-        local ok, res, detail = pcall(PrivateServer.buyMerchantItemViaUi, itemName)
+        local ok, res, detail = pcall(PrivateServer.buyMerchantItem, itemName)
         if ok and res ~= false then
             bought = bought + 1
             Webhook.count("merchant", 1)
