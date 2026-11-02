@@ -8720,6 +8720,8 @@ function Fishing.runMinigame(timeout)
         local player, goal, frame = Fishing.minigameUI()
         if not player or not goal then
             Fishing.setMouseHold(false)
+            Fishing.MiniLastPlayer, Fishing.MiniLastGoal = nil, nil
+            Fishing.MiniPlayerVelocity, Fishing.MiniGoalVelocity = 0, 0
             if sawBar then
                 missingSince = missingSince or os.clock()
                 if os.clock() - missingSince >= 0.4 then
@@ -8731,33 +8733,46 @@ function Fishing.runMinigame(timeout)
         else
             sawBar, missingSince = true, nil
             Fishing.setStatus("minigame bar")
+            -- Tunggu frame berikutnya dulu, lalu baca posisi UI yang sudah diperbarui.
+            -- Ini mengikuti RenderStepped controller pada script contoh tanpa lag satu frame.
+            local dt = RunService.RenderStepped:Wait()
+            player, goal, frame = Fishing.minigameUI()
+            if not player or not goal or not frame then
+                Fishing.setMouseHold(false)
+                Fishing.MiniLastPlayer, Fishing.MiniLastGoal = nil, nil
+                Fishing.MiniPlayerVelocity, Fishing.MiniGoalVelocity = 0, 0
+                missingSince = missingSince or os.clock()
+                if sawBar and os.clock() - missingSince >= 0.4 then
+                    Fishing.releaseMouse()
+                    return true
+                end
+                continue
+            end
             local height = frame.AbsoluteSize.Y
-            if height > 0 then
+            if height > 0 and dt and dt > 0 then
                 local p = (player.AbsolutePosition.Y + player.AbsoluteSize.Y / 2 - frame.AbsolutePosition.Y) / height
                 local g = (goal.AbsolutePosition.Y + goal.AbsoluteSize.Y / 2 - frame.AbsolutePosition.Y) / height
-                local dt = RunService.RenderStepped:Wait()
-                if dt and dt > 0 then
-                    if Fishing.MiniLastPlayer then
-                        Fishing.MiniPlayerVelocity = Fishing.MiniPlayerVelocity * 0.6
-                            + ((p - Fishing.MiniLastPlayer) / dt) * 0.4
-                        Fishing.MiniGoalVelocity = Fishing.MiniGoalVelocity * 0.6
-                            + ((g - Fishing.MiniLastGoal) / dt) * 0.4
-                    end
-                    Fishing.MiniLastPlayer, Fishing.MiniLastGoal = p, g
-                    local pPred = p + Fishing.MiniPlayerVelocity * 0.18
-                    local gPred = g + Fishing.MiniGoalVelocity * 0.10
-                    local want
-                    if Fishing.MouseHeld then
-                        want = pPred > gPred - 0.01
-                    else
-                        want = pPred > gPred + 0.01
-                    end
-                    if want ~= Fishing.MouseHeld and os.clock() - Fishing.LastMiniSwitch >= 0.03 then
-                        Fishing.setMouseHold(want)
-                    end
+                if Fishing.MiniLastPlayer then
+                    Fishing.MiniPlayerVelocity = Fishing.MiniPlayerVelocity * 0.6
+                        + ((p - Fishing.MiniLastPlayer) / dt) * 0.4
+                    Fishing.MiniGoalVelocity = Fishing.MiniGoalVelocity * 0.6
+                        + ((g - Fishing.MiniLastGoal) / dt) * 0.4
+                end
+                Fishing.MiniLastPlayer, Fishing.MiniLastGoal = p, g
+                local pPred = p + Fishing.MiniPlayerVelocity * 0.18
+                local gPred = g + Fishing.MiniGoalVelocity * 0.10
+                local want
+                if Fishing.MouseHeld then
+                    want = pPred > gPred - 0.01
+                else
+                    want = pPred > gPred + 0.01
+                end
+                if want ~= Fishing.MouseHeld and os.clock() - Fishing.LastMiniSwitch >= 0.03 then
+                    Fishing.setMouseHold(want)
                 end
             else
-                RunService.RenderStepped:Wait()
+                Fishing.MiniLastPlayer, Fishing.MiniLastGoal = nil, nil
+                Fishing.MiniPlayerVelocity, Fishing.MiniGoalVelocity = 0, 0
             end
         end
     end
