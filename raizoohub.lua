@@ -4645,17 +4645,12 @@ function MacLib:Window(Settings)
 					return "Config system unavailable." 
 				end
 
-				local inputPath = nil
-				local selectedConfig = nil
 				local autoloadLabel
 
-				configSection:Input({
+				local configNameInput = configSection:Input({
 					Name = "Config Name",
 					Placeholder = "Name",
 					AcceptedCharacters = "All",
-					Callback = function(input)
-						inputPath = input
-					end,
 				})
 
 				local configSelection = configSection:Dropdown({
@@ -4663,15 +4658,21 @@ function MacLib:Window(Settings)
 					Multi = false,
 					Required = false,
 					Options = MacLib:RefreshConfigList(),
-					Callback = function(Value)
-						selectedConfig = Value
-					end,
 				})
+
+				local function getSelectedConfig()
+					for name, selected in pairs(configSelection:GetOptions()) do
+						if selected then return name end
+					end
+					return nil
+				end
 
 				configSection:Button({
 					Name = "Create Config",
 					Callback = function()
-						if not inputPath or string.gsub(inputPath, " ", "") == "" then
+						local inputPath = configNameInput:GetInput()
+						local configName = type(inputPath) == "string" and inputPath:match("^%s*(.-)%s*$") or ""
+						if configName == "" then
 							WindowFunctions:Notify({
 								Title = "Interface",
 								Description = "Config name cannot be empty."
@@ -4679,7 +4680,7 @@ function MacLib:Window(Settings)
 							return
 						end
 
-						local success, returned = MacLib:SaveConfig(inputPath)
+						local success, returned = MacLib:SaveConfig(configName)
 						if not success then
 							WindowFunctions:Notify({
 								Title = "Interface",
@@ -4690,20 +4691,20 @@ function MacLib:Window(Settings)
 
 						WindowFunctions:Notify({
 							Title = "Interface",
-							Description = string.format("Created config %q", inputPath),
+							Description = string.format("Created config %q", configName),
 						})
 
 						configSelection:ClearOptions()
 						configSelection:InsertOptions(MacLib:RefreshConfigList())
-						local configName = inputPath:match("^%s*(.-)%s*$"):gsub("%.json$", "")
-						configSelection:UpdateSelection(configName)
+						local selectedName = configName:gsub("%.json$", "")
+						configSelection:UpdateSelection(selectedName)
 					end,
 				})
 
 				configSection:Button({
 					Name = "Load Config",
 					Callback = function()
-						local name = selectedConfig or configSelection.Value
+						local name = getSelectedConfig()
 						local success, returned = MacLib:LoadConfig(name)
 						if not success then
 							WindowFunctions:Notify({
@@ -4723,7 +4724,7 @@ function MacLib:Window(Settings)
 				configSection:Button({
 					Name = "Save Config",
 					Callback = function()
-						local name = selectedConfig or configSelection.Value
+						local name = getSelectedConfig()
 						local success, returned = MacLib:SaveConfig(name)
 						if not success then
 							WindowFunctions:Notify({
@@ -4743,7 +4744,6 @@ function MacLib:Window(Settings)
 				configSection:Button({
 					Name = "Refresh Config List",
 					Callback = function()
-						selectedConfig = nil
 						configSelection.Value = nil
 						configSelection:ClearOptions()
 						configSelection:InsertOptions(MacLib:RefreshConfigList())
@@ -4753,7 +4753,7 @@ function MacLib:Window(Settings)
 				configSection:Button({
 					Name = "Delete Config",
 					Callback = function()
-						local name = selectedConfig or configSelection.Value
+						local name = getSelectedConfig()
 						local success, returned = MacLib:DeleteConfig(name)
 						if not success then
 							WindowFunctions:Notify({
@@ -4769,7 +4769,6 @@ function MacLib:Window(Settings)
 								autoloadLabel:UpdateName("Autoload config: None")
 							end
 						end
-						selectedConfig = nil
 						configSelection.Value = nil
 						configSelection:ClearOptions()
 						configSelection:InsertOptions(MacLib:RefreshConfigList())
@@ -4780,7 +4779,7 @@ function MacLib:Window(Settings)
 				configSection:Button({
 					Name = "Set Autoload Config",
 					Callback = function()
-						local name = selectedConfig or configSelection.Value
+						local name = getSelectedConfig()
 						if not name then
 							WindowFunctions:Notify({Title = "Interface", Description = "Pilih config dulu."})
 							return
@@ -5429,8 +5428,8 @@ function MacLib:Window(Settings)
 				}
 			end,
 			Load = function(Flag, data)
-				if MacLib.Options[Flag] and data.state then
-					MacLib.Options[Flag]:UpdateState(data.state)
+				if MacLib.Options[Flag] and data.state ~= nil then
+					MacLib.Options[Flag]:UpdateState(data.state == true)
 				end
 			end
 		},
@@ -5622,9 +5621,10 @@ function MacLib:Window(Settings)
 
 		for _, option in next, decoded.objects do
 			if type(option) == "table" and ClassParser[option.type] then
-				task.spawn(function() 
-					ClassParser[option.type].Load(option.flag, option) 
-				end)
+				local loaded, loadError = pcall(ClassParser[option.type].Load, option.flag, option)
+				if not loaded then
+					return false, "Unable to load option " .. tostring(option.flag) .. ": " .. tostring(loadError)
+				end
 			end
 		end
 
@@ -7927,14 +7927,24 @@ function UI.MacInput(section, name, box, placeholder)
             box.Text = value
             applySettings()
         end,
-    })
+    }, UI.MacConfigFlag(section, name))
+end
+function UI.MacConfigFlag(section, name)
+    local sectionName = "General"
+    for key, value in pairs(UI.MacSections) do
+        if value == section then
+            sectionName = key
+            break
+        end
+    end
+    return "RaizooHub_" .. sectionName .. "_" .. tostring(name):gsub("[^%w]", "")
 end
 function UI.MacToggle(section, name, get, set)
     return section:Toggle({
         Name = name,
         Default = get(),
         Callback = function(value) set(value) end,
-    })
+    }, UI.MacConfigFlag(section, name))
 end
 function UI.MacButton(section, name, callback)
     return section:Button({Name = name, Callback = callback})
@@ -9047,11 +9057,27 @@ UI.MacState.FishingStatus = UI.MacSections.Fishing:Label({Text = "Fishing: nonak
 UI.MacToggle(UI.MacSections.Fishing, "Auto Fishing", function() return Settings.AutoFishing end,
     function(value) if value then Fishing.start() else Fishing.stop() end end)
 UI.MacState.FishingBait = UI.MacSections.Fishing:Label({Text = "Bait: " .. Fishing.selectedBait()})
+UI.MacState.FishingBaitConfig = UI.MacSections.Fishing:Dropdown({
+    Name = "FishingBaitConfig",
+    Search = false,
+    Multi = false,
+    Required = true,
+    Options = FISH_BAITS,
+    Default = Fishing.selectedBait(),
+    Callback = function(value)
+        if table.find(FISH_BAITS, value) then
+            Settings.FishingBait = value
+            Fishing.SelectedBait = nil
+            if UI.MacState.FishingBait then
+                UI.MacState.FishingBait:UpdateName("Bait: " .. value)
+            end
+        end
+    end,
+}, "FishingBait")
+UI.MacState.FishingBaitConfig:SetVisibility(false)
 UI.MacButton(UI.MacSections.Fishing, "Ganti bait", function()
     local current = table.find(FISH_BAITS, Fishing.selectedBait()) or 0
-    Settings.FishingBait = FISH_BAITS[current % #FISH_BAITS + 1]
-    Fishing.SelectedBait = nil
-    if UI.MacState.FishingBait then UI.MacState.FishingBait:UpdateName("Bait: " .. Settings.FishingBait) end
+    UI.MacState.FishingBaitConfig:UpdateSelection(FISH_BAITS[current % #FISH_BAITS + 1])
 end)
 UI.MacToggle(UI.MacSections.Fishing, "Auto Buy Common Bait", function() return Settings.AutoBuyBait end,
     function(value) Settings.AutoBuyBait = value end)
