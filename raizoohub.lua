@@ -6478,7 +6478,7 @@ local Settings = {
     AutoRaceReroll = false,
     TargetRace = "Human",
     AutoFishing = false,
-    FishingBaits = {"Common Fish Bait"},
+    FishingBait = "Common Fish Bait",
     AutoBuyBait = false,
     BaitThreshold = 10,
     BaitBuyAmount = 10,
@@ -8378,6 +8378,12 @@ local Fishing = {
     MiniGoalVelocity = 0,
 }
 local FISH_BAITS = {"Common Fish Bait", "Rare Fish Bait", "Legendary Fish Bait"}
+-- Migrasi config lama yang menyimpan daftar prioritas menjadi satu pilihan aktif,
+-- seperti baitIdx pada script contoh.
+if not table.find(FISH_BAITS, Settings.FishingBait) then
+    local oldBaits = Settings.FishingBaits
+    Settings.FishingBait = type(oldBaits) == "table" and (oldBaits[1] or "Common Fish Bait") or "Common Fish Bait"
+end
 local fishRarityCache, fishRarityCheckedAt = nil, 0
 
 function Fishing.setStatus(text)
@@ -8464,21 +8470,7 @@ function Fishing.baitCount(name)
 end
 
 function Fishing.selectedBait()
-    local inventory = Fishing.inventory() or {}
-    local wanted = {}
-    for k, v in pairs(Settings.FishingBaits or {}) do
-        if type(k) == "number" and type(v) == "string" then wanted[v] = true
-        elseif type(k) == "string" and v then wanted[k] = true end
-    end
-    -- Utamakan bait yang dipilih; jika stoknya kosong, cari tipe bait lain yang masih ada.
-    for _, name in ipairs(FISH_BAITS) do
-        if wanted[name] and (Fishing.baitCount(name) or 0) > 0 then return name end
-    end
-    for _, name in ipairs(FISH_BAITS) do
-        if (Fishing.baitCount(name) or 0) > 0 then return name end
-    end
-    for _, name in ipairs(FISH_BAITS) do if wanted[name] then return name end end
-    return "Common Fish Bait"
+    return table.find(FISH_BAITS, Settings.FishingBait) and Settings.FishingBait or FISH_BAITS[1]
 end
 
 function Fishing.findRod(container)
@@ -8794,9 +8786,8 @@ function Fishing.fishOnce()
             Fishing.SelectedBait = bait
             task.wait(0.4)
         else
-            -- Seperti contoh: jika GUI tidak muncul, lanjut lempar dengan pilihan game saat ini.
-            Fishing.setStatus("GUI bait tidak muncul; mencoba lempar")
-            Fishing.SelectedBait = bait
+            -- Seperti script contoh: coba pilih bait lagi di siklus berikutnya.
+            Fishing.setStatus("GUI bait tidak muncul")
             task.wait(0.2)
         end
     end
@@ -9040,19 +9031,13 @@ UI.MacSections.Fishing:Header({Name = "Fishing Tensen"})
 UI.MacState.FishingStatus = UI.MacSections.Fishing:Label({Text = "Fishing: nonaktif"})
 UI.MacToggle(UI.MacSections.Fishing, "Auto Fishing", function() return Settings.AutoFishing end,
     function(value) if value then Fishing.start() else Fishing.stop() end end)
-UI.MacState.FishingBaits = UI.MacSections.Fishing:Dropdown({
-    Name = "Prioritas bait",
-    Search = false,
-    Multi = true,
-    Required = false,
-    Options = FISH_BAITS,
-    Default = Settings.FishingBaits,
-    Callback = function(value)
-        local selected = {}
-        for _, bait in ipairs(FISH_BAITS) do if value[bait] then table.insert(selected, bait) end end
-        Settings.FishingBaits = selected
-    end,
-}, "FishingBaits")
+UI.MacState.FishingBait = UI.MacSections.Fishing:Label({Text = "Bait: " .. Fishing.selectedBait()})
+UI.MacButton(UI.MacSections.Fishing, "Ganti bait", function()
+    local current = table.find(FISH_BAITS, Fishing.selectedBait()) or 0
+    Settings.FishingBait = FISH_BAITS[current % #FISH_BAITS + 1]
+    Fishing.SelectedBait = nil
+    if UI.MacState.FishingBait then UI.MacState.FishingBait:UpdateName("Bait: " .. Settings.FishingBait) end
+end)
 UI.MacToggle(UI.MacSections.Fishing, "Auto Buy Common Bait", function() return Settings.AutoBuyBait end,
     function(value) Settings.AutoBuyBait = value end)
 UI.MacSections.Fishing:Input({
