@@ -9381,35 +9381,14 @@ UI.MacInput(UI.MacSections.Webhook, "Item ping @everyone (manual)", Webhook.Rare
     "Nama item, pisah koma")
 UI.MacTabs.Farm:Select()
 
--- Config UI disimpan otomatis per UserId, dan dipulihkan setelah semua widget terdaftar.
-UserConfig.startAutoSave = function()
-    local settingsPath = UserConfig.Folder .. "/settings"
-    local autoPath = settingsPath .. "/autosave.json"
-    local autoloadPath = settingsPath .. "/autoload.txt"
-
-    if typeof(isfile) == "function" and typeof(writefile) == "function" then
-        pcall(function()
-            if not isfile(autoPath) then MacLib:SaveConfig("autosave") end
-            if not isfile(autoloadPath) then writefile(autoloadPath, "autosave") end
-            MacLib:LoadAutoLoadConfig()
-        end)
+-- Config bernama disimpan hanya saat tombol Save Config / Create Config ditekan.
+-- Autoload tetap berjalan jika pengguna sudah memilih config autoload.
+UserConfig.loadSavedConfig = function()
+    if typeof(isfile) == "function" and typeof(readfile) == "function" then
+        pcall(function() MacLib:LoadAutoLoadConfig() end)
     end
-
-    task.spawn(function()
-        while true do
-            task.wait(5)
-            pcall(function() MacLib:SaveConfig("autosave") end)
-            pcall(PrivateServer.save)
-            pcall(function()
-                Webhook.Url = Webhook.trim(Webhook.UrlBox.Text)
-                Webhook.Rare = Webhook.trim(Webhook.RareBox.Text)
-                Webhook.save()
-            end)
-            pcall(Drop.save)
-        end
-    end)
 end
-UserConfig.startAutoSave()
+UserConfig.loadSavedConfig()
 
 -- RightShift: sembunyikan / tampilkan GUI (script tetap jalan)
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -10931,37 +10910,138 @@ local function getMerchantItemList()
     return list
 end
 
--- Gunakan alur pembelian merchant dari script contoh; klik kartu shop akan
--- memunculkan ConfirmationPrompt "Purchase ...?" yang tidak dipakai Tensen.
-function PrivateServer.buyMerchantItem(itemName)
-    -- Nilai stock/session dari script pengguna; dapat berubah setelah restock.
-    local STOCK_ID = 1613697448
-    local STOCK_GUID = "6a75e173-f8a5-4d9e-b989-25536ecbd53c"
-    local events = ReplicatedStorage:WaitForChild("Events", 5)
-    local remote = events and events:WaitForChild("TravelingMerchentRemote", 5)
-    if not remote or not remote:IsA("RemoteFunction") then
-        error("Events.TravelingMerchentRemote gak ketemu atau bukan RemoteFunction")
-    end
-    local peliBefore = getPeli()
-    local response = remote:InvokeServer(itemName, STOCK_ID, STOCK_GUID)
-    if response == false or (type(response) == "table"
-        and (response.Success == false or response.Accepted == false)) then
-        return false, "server menolak pembelian: " .. tostring(response)
+-- Cadangan memakai kartu shop aktif jika STOCK_ID/GUID lama ditolak sesudah restock.
+function PrivateServer.buyMerchantItemViaUi(itemName)
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if not playerGui then return false, "PlayerGui belum tersedia" end
+
+    local function visible(obj)
+        local node = obj
+        while node and node ~= playerGui do
+            if node:IsA("GuiObject") and not node.Visible then return false end
+            if node:IsA("ScreenGui") and not node.Enabled then return false end
+            node = node.Parent
+        end
+        return node == playerGui
     end
 
-    -- Pastikan server menyelesaikan transaksi jika saldo Peli tersedia di HUD.
-    if peliBefore > 0 then
-        local deadline = tick() + 3
-        repeat
-            task.wait(0.1)
-            local peliAfter = getPeli()
-            if peliAfter < peliBefore then
-                return true, "Peli " .. tostring(peliBefore) .. " -> " .. tostring(peliAfter)
+    local function findCardButton()
+        for _, obj in ipairs(playerGui:GetDescendants()) do
+            if obj.Name == itemName then
+                local main = obj:FindFirstChild("Main")
+                local button = main and main:FindFirstChild("Button")
+                if button and button:IsA("GuiButton") and visible(button) then return button end
             end
-        until tick() >= deadline
-        return false, "Peli tidak berkurang; STOCK_ID/GUID mungkin berubah setelah restock"
+        end
+        return nil
     end
-    return true, tostring(response)
+
+    local function findConfirmation()
+        local prompt = playerGui:FindFirstChild("ConfirmationPrompt")
+        local main = prompt and prompt:FindFirstChild("Main")
+        local options = main and main:FindFirstChild("OptionsFrame")
+        local accept = options and options:FindFirstChild("Accept")
+        if not accept or not visible(accept) then return nil end
+        local text = {}
+        for _, obj in ipairs(main:GetDescendants()) do
+            if (obj:IsA("TextLabel") or obj:IsA("TextButton")) and obj.Text ~= "" and visible(obj) then
+                table.insert(text, obj.Text:gsub("<.->", ""))
+            end
+        end
+        local message = table.concat(text, " "):lower()
+        if not message:find(itemName:lower(), 1, true) then return nil end
+        return accept
+    end
+
+    local function clickPhysical(button)
+        local pos, size = button.AbsolutePosition, button.AbsoluteSize
+        local inset = game:GetService("GuiService"):GetGuiInset()
+        local screenGui = button:FindFirstAncestorWhichIsA("ScreenGui")
+        local offsetY = screenGui and screenGui.IgnoreGuiInset and 0 or inset.Y
+        local x, y = pos.X + size.X / 2, pos.Y + size.Y / 2 + offsetY
+        VirtualInputManager:SendMouseMoveEvent(x, y, game)
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+        task.wait(0.08)
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    end
+
+    local button = findCardButton()
+    if not button then return false, "kartu shop untuk '" .. itemName .. "' tidak ditemukan" end
+    local peliBefore = getPeli()
+    pcall(clickPhysical, button)
+    task.wait(0.15)
+    local prompt = playerGui:FindFirstChild("ConfirmationPrompt")
+    if not findConfirmation() and not (prompt and visible(prompt)) then
+        PrivateServer.press(button)
+    end
+
+    local deadline = tick() + 3
+    local accept
+    repeat
+        accept = findConfirmation()
+        if accept then break end
+        task.wait(0.1)
+    until tick() >= deadline
+    if not accept then return false, "konfirmasi merchant untuk item ini tidak muncul" end
+
+    pcall(clickPhysical, accept)
+    task.wait(0.25)
+    accept = findConfirmation()
+    if accept and (peliBefore == 0 or getPeli() >= peliBefore) then
+        PrivateServer.press(accept)
+    end
+
+    deadline = tick() + 4
+    repeat
+        local current = findConfirmation()
+        local peliAfter = getPeli()
+        if peliBefore > 0 and peliAfter < peliBefore then
+            return true, "pembelian UI berhasil; Peli " .. tostring(peliBefore) .. " -> " .. tostring(peliAfter)
+        end
+        if not current and peliBefore == 0 then return true, "prompt merchant tertutup" end
+        task.wait(0.1)
+    until tick() >= deadline
+    return false, "konfirmasi ditangani tetapi saldo Peli tidak berkurang"
+end
+
+function PrivateServer.buyMerchantItem(itemName)
+    -- Nilai stock/session dari script pengguna; bisa berubah setelah restock.
+    local STOCK_ID = 1613697448
+    local STOCK_GUID = "6a75e173-f8a5-4d9e-b989-25536ecbd53c"
+    local events = ReplicatedStorage:FindFirstChild("Events")
+    local remote = events and events:FindFirstChild("TravelingMerchentRemote")
+    local peliBefore = getPeli()
+    local directReason = "TravelingMerchentRemote tidak tersedia"
+
+    if remote and remote:IsA("RemoteFunction") then
+        local called, response = pcall(function()
+            return remote:InvokeServer(itemName, STOCK_ID, STOCK_GUID)
+        end)
+        if called and response ~= false and not (type(response) == "table"
+            and (response.Success == false or response.Accepted == false)) then
+            if peliBefore > 0 then
+                local deadline = tick() + 3
+                repeat
+                    task.wait(0.1)
+                    local peliAfter = getPeli()
+                    if peliAfter < peliBefore then
+                        return true, "remote berhasil; Peli " .. tostring(peliBefore) .. " -> " .. tostring(peliAfter)
+                    end
+                until tick() >= deadline
+                if response ~= nil then return true, tostring(response) end
+                directReason = "remote tidak mengonfirmasi perubahan saldo"
+            else
+                return true, tostring(response)
+            end
+        else
+            directReason = called and "server menolak dengan false" or tostring(response)
+        end
+    end
+
+    local fallbackOk, fallbackResult, fallbackDetail = pcall(PrivateServer.buyMerchantItemViaUi, itemName)
+    if fallbackOk and fallbackResult then return true, fallbackDetail or "pembelian lewat kartu shop" end
+    local fallbackError = fallbackOk and tostring(fallbackDetail or fallbackResult) or tostring(fallbackResult)
+    return false, "remote ditolak (" .. directReason .. "); fallback UI gagal: " .. fallbackError
 end
 -- Equip Snail Phone dan tunggu sampai item pilihan terlihat di stock shop.
 local function activateMerchantPhone(items)
