@@ -10945,7 +10945,7 @@ function PrivateServer.buyMerchantItemViaUi(itemName)
         local main = prompt and prompt:FindFirstChild("Main")
         local options = main and main:FindFirstChild("OptionsFrame")
         local accept = options and options:FindFirstChild("Accept")
-        if not accept or not visible(accept) then return nil end
+        if not accept or not accept:IsA("ImageButton") or not visible(accept) then return nil end
         local text = {}
         for _, obj in ipairs(main:GetDescendants()) do
             if (obj:IsA("TextLabel") or obj:IsA("TextButton")) and obj.Text ~= "" and visible(obj) then
@@ -10988,11 +10988,13 @@ function PrivateServer.buyMerchantItemViaUi(itemName)
     until tick() >= deadline
     if not accept then return false, "konfirmasi merchant untuk item ini tidak muncul" end
 
-    pcall(clickPhysical, accept)
-    task.wait(0.25)
+    -- Accept di ConfirmationPrompt adalah ImageButton; utamakan aktivasi
+    -- koneksi tombol, lalu gunakan klik fisik jika prompt masih terbuka.
+    pcall(PrivateServer.press, accept)
+    task.wait(0.45)
     accept = findConfirmation()
-    if accept and (peliBefore == 0 or getPeli() >= peliBefore) then
-        PrivateServer.press(accept)
+    if accept then
+        pcall(clickPhysical, accept)
     end
 
     deadline = tick() + 4
