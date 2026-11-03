@@ -8602,6 +8602,37 @@ function Fishing.castGoal(root)
     return point
 end
 
+-- Putar avatar ke sisi yang benar-benar punya air di depan spot. Arah badan
+-- menjadi sumber arah lempar, tidak tergantung yaw kamera yang menghadap belakang.
+function Fishing.faceWater()
+    local character = LocalPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not root then return false end
+
+    local directions = {
+        Vector3.new(0, 0, -1), Vector3.new(1, 0, -1), Vector3.new(1, 0, 0),
+        Vector3.new(1, 0, 1), Vector3.new(0, 0, 1), Vector3.new(-1, 0, 1),
+        Vector3.new(-1, 0, 0), Vector3.new(-1, 0, -1),
+    }
+    local bestDirection, bestScore = nil, 0
+    for _, direction in ipairs(directions) do
+        direction = direction.Unit
+        local score = 0
+        for _, distance in ipairs({24, 40}) do
+            local point = root.Position + direction * distance
+            if Fishing.waterY(point, nil) ~= nil then score = score + 1 end
+        end
+        if score > bestScore then
+            bestDirection, bestScore = direction, score
+        end
+    end
+
+    if not bestDirection then return false end
+    root.CFrame = CFrame.lookAt(root.Position, root.Position + bestDirection)
+    task.wait(0.1)
+    return true
+end
+
 function Fishing.pinHook(goal)
     task.spawn(function()
         local effects = workspace:FindFirstChild("Effects")
@@ -8721,14 +8752,26 @@ end
 
 function Fishing.castByMouse()
     local camera = workspace.CurrentCamera
-    if not camera then return false end
+    local character = LocalPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not camera or not root then return false end
+
+    local flatLook = Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z)
+    if flatLook.Magnitude < 0.01 then return false end
+    flatLook = flatLook.Unit
+
+    -- Lempar lewat ray tengah layar setelah menyamakan yaw kamera dengan badan.
+    -- Posisi mouse lama tidak lagi menentukan arah kail.
+    local originalCameraCFrame = camera.CFrame
+    local castDirection = (flatLook - Vector3.new(0, 0.08, 0)).Unit
+    camera.CFrame = CFrame.lookAt(camera.CFrame.Position, camera.CFrame.Position + castDirection)
     local viewport = camera.ViewportSize
-    local x, y = math.floor(viewport.X / 2), math.floor(viewport.Y * 0.38)
+    local x, y = math.floor(viewport.X / 2), math.floor(viewport.Y / 2)
     VirtualInputManager:SendMouseMoveEvent(x, y, game)
-    task.wait(0.1)
     VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
     task.wait(1)
     VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    if workspace.CurrentCamera == camera then camera.CFrame = originalCameraCFrame end
     return true
 end
 
@@ -8852,6 +8895,7 @@ function Fishing.fishOnce()
     end
 
     if not Settings.AutoFishing then return end
+    Fishing.faceWater()
     Fishing.setStatus("melempar kail")
     if not Fishing.castByMouse() then task.wait(0.5); return end
 
@@ -8883,7 +8927,7 @@ function Fishing.getSpot()
     elseif game.PlaceId == 116480749200627 then
         return CFrame.new(-15.0580778, 4.21153259, -1423.65332)
     elseif game.PlaceId == 3978370137 then
-        return CFrame.new(-1336, 4, -4969)
+        return CFrame.new(-1334.9, 4.1, -4959.8)
     end
     return nil
 end
