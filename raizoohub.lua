@@ -10949,11 +10949,9 @@ HalloweenShopStatus = function(text)
 end
 
 -- ============ Auto Merchant (Traveling Merchant) ============
--- Dari source: merchant dianggap "lagi muncul" kalau ada value
--- ReplicatedStorage.CompassGuider["Traveling Merchant"] (Vector3 / CFrame = posisi
--- merchant). Kalau value itu gak ada, merchant lagi gak keluar. Stok merchant
--- restock tiap 30 menit; 1 stok cukup dibeli sekali, jadi setelah beli kita
--- tandai MerchantBought dan baru reset pas marker-nya hilang (stok berikutnya).
+-- Status spawn mengikuti NPC Traveling Merchant di workspace.NPCs agar value
+-- kompas yang tertinggal setelah despawn tidak membuat MerchantBought terkunci.
+-- CompassGuider hanya dipakai bila folder NPC belum direplikasi.
 
 -- Pembelian dilakukan lewat tombol shop agar game memakai argumen stok/sesi yang aktif.
 local MERCHANT_BUY_CONFIGURED = true
@@ -10962,6 +10960,7 @@ local MerchantBought = false   -- stok yang lagi keluar sudah dibeli
 local MerchantRetryAt = 0
 local MerchantFails = 0
 local MerchantWarned = false
+local MerchantMissingSince = nil
 
 local MerchantTarget = Instance.new("Part")
 MerchantTarget.Name = "AutoEventDoorMerchantTarget"
@@ -10972,19 +10971,67 @@ MerchantTarget.Anchored = true
 MerchantTarget.Parent = workspace
 
 local function getMerchantMarker()
+    -- NPC fisik paling akurat untuk status spawn/despawn; compass marker bisa
+    -- tertinggal di ReplicatedStorage setelah merchant pergi.
+    local npcs = workspace:FindFirstChild("NPCs", true)
+    if npcs then return npcs:FindFirstChild("Traveling Merchant") end
+
     local compassGuider = ReplicatedStorage:FindFirstChild("CompassGuider")
     local marker = compassGuider and compassGuider:FindFirstChild("Traveling Merchant")
     if marker then return marker end
-
-    -- Fallback when the compass marker is not replicated in this server.
-    local npcs = workspace:FindFirstChild("NPCs", true)
-    return npcs and npcs:FindFirstChild("Traveling Merchant")
+    return nil
 end
 
 local function getMerchantPosition(marker)
-    local value = marker and marker.Value
+    if not marker then return nil end
+    if marker:IsA("Model") then
+        local ok, pivot = pcall(function() return marker:GetPivot() end)
+        return ok and pivot.Position or nil
+    end
+    if marker:IsA("BasePart") then return marker.Position end
+
+    local value = marker:IsA("ValueBase") and marker.Value or nil
     if typeof(value) == "CFrame" then return value.Position end
     if typeof(value) == "Vector3" then return value end
+    if typeof(value) == "Instance" then
+        if value:IsA("Model") then
+            local ok, pivot = pcall(function() return value:GetPivot() end)
+            return ok and pivot.Position or nil
+        elseif value:IsA("BasePart") then
+            return value.Position
+        end
+    end
+    return nil
+end
+
+local function getActiveMerchantMarker()
+    local marker = getMerchantMarker()
+    if not marker or not marker.Parent then return nil end
+
+    if marker:IsA("Model") or marker:IsA("BasePart") then return marker end
+    local position = getMerchantPosition(marker)
+    if position and position.Magnitude > 1 then return marker end
+    return nil -- Value marker kosong/nol berarti merchant sedang tidak spawn.
+end
+
+local function refreshMerchantMarker()
+    local marker = getActiveMerchantMarker()
+    if marker then
+        MerchantMissingSince = nil
+        return marker
+    end
+
+    -- Hindari reset karena reparent/replikasi singkat; merchant harus benar-benar
+    -- tidak terdeteksi selama beberapa detik sebelum dianggap despawn.
+    MerchantMissingSince = MerchantMissingSince or tick()
+    if tick() - MerchantMissingSince >= 3 then
+        if MerchantBought or MerchantFails > 0 then
+            print("[AutoEventDoor] Merchant despawn terdeteksi; status pembelian di-reset untuk spawn berikutnya.")
+        end
+        MerchantBought = false
+        MerchantFails = 0
+        MerchantRetryAt = 0
+    end
     return nil
 end
 
@@ -11296,10 +11343,8 @@ task.spawn(function()
         if Settings.AutoMerchant and not Enabled and not Settings.MerchantWatcherRunning then
             Settings.MerchantWatcherRunning = true
             while Settings.AutoMerchant and not Enabled do
-                local merchantMarker = getMerchantMarker()
+                local merchantMarker = refreshMerchantMarker()
                 if not merchantMarker then
-                    MerchantBought = false
-                    MerchantFails = 0
                     if not Settings.MerchantMarkerWarned then
                         print("[AutoEventDoor] Auto Merchant ON, tapi marker Traveling Merchant belum terdeteksi.")
                         Settings.MerchantMarkerWarned = true
@@ -11968,10 +12013,8 @@ local function mainLoop()
         local tripped = false
 
         -- Traveling Merchant: marker hilang = stok berikutnya boleh dibeli lagi
-        local merchantMarker = getMerchantMarker()
+        local merchantMarker = refreshMerchantMarker()
         if not merchantMarker then
-            MerchantBought = false
-            MerchantFails = 0
             if Settings.AutoMerchant and not Settings.MerchantMarkerWarned then
                 print("[AutoEventDoor] Auto Merchant ON, tapi marker Traveling Merchant belum terdeteksi.")
                 Settings.MerchantMarkerWarned = true
