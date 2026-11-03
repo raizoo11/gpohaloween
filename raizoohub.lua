@@ -10958,26 +10958,44 @@ function PrivateServer.buyMerchantItemViaUi(itemName)
     end
 
     local function clickPhysical(button)
-        local pos, size = button.AbsolutePosition, button.AbsoluteSize
-        local inset = game:GetService("GuiService"):GetGuiInset()
-        local screenGui = button:FindFirstAncestorWhichIsA("ScreenGui")
-        local offsetY = screenGui and screenGui.IgnoreGuiInset and 0 or inset.Y
-        local x, y = pos.X + size.X / 2, pos.Y + size.Y / 2 + offsetY
-        VirtualInputManager:SendMouseMoveEvent(x, y, game)
-        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+        if Fishing and type(Fishing.clickGuiObject) == "function" then
+            Fishing.clickGuiObject(button)
+            return
+        end
+        local point = button.AbsolutePosition + button.AbsoluteSize / 2
+        VirtualInputManager:SendMouseMoveEvent(point.X, point.Y, game)
+        VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, true, game, 0)
         task.wait(0.08)
-        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+        VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, false, game, 0)
+    end
+
+    local function activateButton(button, actionDetected)
+        if not button or not button:IsA("GuiButton") then return false end
+        pcall(function() button:Activate() end)
+        task.wait(0.25)
+        if actionDetected() then return true end
+
+        if Fishing and type(Fishing.fireGuiButton) == "function" then
+            pcall(Fishing.fireGuiButton, button)
+        else
+            pcall(PrivateServer.press, button)
+        end
+        task.wait(0.25)
+        if actionDetected() then return true end
+
+        pcall(clickPhysical, button)
+        task.wait(0.35)
+        return actionDetected()
     end
 
     local button = findCardButton()
     if not button then return false, "kartu shop untuk '" .. itemName .. "' tidak ditemukan" end
     local peliBefore = getPeli()
-    pcall(clickPhysical, button)
-    task.wait(0.15)
-    local prompt = playerGui:FindFirstChild("ConfirmationPrompt")
-    if not findConfirmation() and not (prompt and visible(prompt)) then
-        PrivateServer.press(button)
+    local function promptVisible()
+        local prompt = playerGui:FindFirstChild("ConfirmationPrompt")
+        return findConfirmation() ~= nil or (prompt and visible(prompt))
     end
+    activateButton(button, promptVisible)
 
     local deadline = tick() + 3
     local accept
@@ -10988,14 +11006,11 @@ function PrivateServer.buyMerchantItemViaUi(itemName)
     until tick() >= deadline
     if not accept then return false, "konfirmasi merchant untuk item ini tidak muncul" end
 
-    -- Accept di ConfirmationPrompt adalah ImageButton; utamakan aktivasi
-    -- koneksi tombol, lalu gunakan klik fisik jika prompt masih terbuka.
-    pcall(PrivateServer.press, accept)
-    task.wait(0.45)
-    accept = findConfirmation()
-    if accept then
-        pcall(clickPhysical, accept)
-    end
+    -- ImageButton harus menerima Activated/click; verifikasi prompt/saldo
+    -- setelah setiap metode agar fallback tidak mengirim klik ganda.
+    activateButton(accept, function()
+        return findConfirmation() == nil or (peliBefore > 0 and getPeli() < peliBefore)
+    end)
 
     deadline = tick() + 4
     repeat
