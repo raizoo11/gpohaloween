@@ -10949,7 +10949,8 @@ function PrivateServer.buyMerchantItemViaUi(itemName)
         local text = {}
         for _, obj in ipairs(main:GetDescendants()) do
             if (obj:IsA("TextLabel") or obj:IsA("TextButton")) and obj.Text ~= "" and visible(obj) then
-                table.insert(text, obj.Text:gsub("<.->", ""))
+                local cleanText = obj.Text:gsub("<.->", "")
+                table.insert(text, cleanText)
             end
         end
         local message = table.concat(text, " "):lower()
