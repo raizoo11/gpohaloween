@@ -10960,6 +10960,10 @@ local MerchantRetryAt = 0
 local MerchantFails = 0
 local MerchantWarned = false
 local MerchantMissingSince = nil
+PrivateServer.MerchantBoughtPosition = nil
+PrivateServer.MerchantBoughtAt = 0
+PrivateServer.MerchantPositionCandidate = nil
+PrivateServer.MerchantPositionCandidateAt = nil
 
 local MerchantTarget = Instance.new("Part")
 MerchantTarget.Name = "AutoEventDoorMerchantTarget"
@@ -11015,6 +11019,27 @@ local function refreshMerchantMarker()
     local marker = getActiveMerchantMarker()
     if marker then
         MerchantMissingSince = nil
+        local position = getMerchantPosition(marker)
+        if MerchantBought and PrivateServer.MerchantBoughtPosition and position
+            and tick() - PrivateServer.MerchantBoughtAt >= 60
+            and (position - PrivateServer.MerchantBoughtPosition).Magnitude >= 50 then
+            if not PrivateServer.MerchantPositionCandidate
+                or (position - PrivateServer.MerchantPositionCandidate).Magnitude > 8 then
+                PrivateServer.MerchantPositionCandidate = position
+                PrivateServer.MerchantPositionCandidateAt = tick()
+            elseif tick() - PrivateServer.MerchantPositionCandidateAt >= 3 then
+                print("[AutoEventDoor] Posisi Compass Merchant berubah; dianggap spawn baru.")
+                MerchantBought = false
+                MerchantFails = 0
+                MerchantRetryAt = 0
+                PrivateServer.MerchantBoughtPosition = nil
+                PrivateServer.MerchantPositionCandidate = nil
+                PrivateServer.MerchantPositionCandidateAt = nil
+            end
+        else
+            PrivateServer.MerchantPositionCandidate = nil
+            PrivateServer.MerchantPositionCandidateAt = nil
+        end
         return marker
     end
 
@@ -11028,6 +11053,9 @@ local function refreshMerchantMarker()
         MerchantBought = false
         MerchantFails = 0
         MerchantRetryAt = 0
+        PrivateServer.MerchantBoughtPosition = nil
+        PrivateServer.MerchantPositionCandidate = nil
+        PrivateServer.MerchantPositionCandidateAt = nil
     end
     return nil
 end
@@ -11042,6 +11070,35 @@ local function getPeli()
     if not label then return 0 end
     local digits = label.Text:gsub("[^%d]", "")
     return tonumber(digits) or 0
+end
+
+local function arriveAtMerchant(marker)
+    local position = getMerchantPosition(marker)
+    if not position or position.Magnitude <= 1 then return false end
+
+    MerchantTarget.Position = position
+    local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not root then return false end
+    local function closeEnough(currentRoot)
+        return currentRoot ~= nil and (currentRoot.Position - position).Magnitude <= 16
+    end
+    if closeEnough(root) then return true end
+
+    Stat.set("Menuju Traveling Merchant", Stat.towards(function()
+        return getMerchantPosition(marker) or position
+    end, "mendekati merchant untuk membuka Snail Phone"), "move")
+
+    local arrived
+    if Enabled then
+        arrived = walkToDoorHeld(MerchantTarget)
+    else
+        arrived = UI.IslandTravel.moveTo(CFrame.new(position), "Traveling Merchant", function()
+            return Settings.AutoMerchant and not Enabled and not UI.IslandTravel.Enabled
+        end)
+    end
+
+    root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    return arrived and closeEnough(root)
 end
 
 local function sellSelectedFish()
@@ -11301,6 +11358,12 @@ local function doMerchantTrip(marker)
         return false
     end
 
+    if not arriveAtMerchant(marker) then
+        print("[AutoEventDoor] Belum sampai dekat Traveling Merchant; pembelian ditunda.")
+        return false
+    end
+    task.wait(0.5) -- beri waktu NPC/shop ter-replikasi setelah tiba di marker
+
     print("[AutoEventDoor] Traveling Merchant muncul, membuka shop dengan Snail Phone...")
     Stat.set("Membuka Traveling Merchant", "equip & aktifkan Snail Phone", "work")
     local phoneOk, availableItems = pcall(activateMerchantPhone, items)
@@ -11363,6 +11426,8 @@ task.spawn(function()
                         if ok and bought then
                             MerchantBought = true
                             MerchantFails = 0
+                            PrivateServer.MerchantBoughtPosition = getMerchantPosition(merchantMarker)
+                            PrivateServer.MerchantBoughtAt = tick()
                         else
                             MerchantFails = MerchantFails + 1
                             MerchantRetryAt = tick() + math.min(30 * MerchantFails, 120)
@@ -12039,6 +12104,8 @@ local function mainLoop()
                 if doMerchantTrip(merchantMarker) then
                     MerchantBought = true
                     MerchantFails = 0
+                    PrivateServer.MerchantBoughtPosition = getMerchantPosition(merchantMarker)
+                    PrivateServer.MerchantBoughtAt = tick()
                 else
                     MerchantFails = MerchantFails + 1
                     MerchantRetryAt = tick() + math.min(30 * MerchantFails, 120)
