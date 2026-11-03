@@ -5477,10 +5477,19 @@ function MacLib:Window(Settings)
 		},
 		["Dropdown"] = {
 			Save = function(Flag, data)
+				local value = data.Value
+				-- Multi-select: serialize the live checked options, not a stale cached Value.
+				if data.Settings and data.Settings.Multi and type(data.GetOptions) == "function" then
+					value = {}
+					for option, selected in pairs(data:GetOptions()) do
+						if selected then table.insert(value, option) end
+					end
+					table.sort(value)
+				end
 				return {
 					type = "Dropdown", 
 					flag = Flag, 
-					value = data.Value
+					value = value
 				}
 			end,
 			Load = function(Flag, data)
@@ -11246,29 +11255,29 @@ local function activateMerchantPhone(items)
     local function getVisibleStockItems()
         local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
         if not playerGui then return {} end
-        local found = {}
-        for _, obj in ipairs(playerGui:GetDescendants()) do
-            if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
-                local screenGui = obj:FindFirstAncestorWhichIsA("ScreenGui")
-                local visible = screenGui ~= nil and screenGui.Enabled
-                local node = obj
-                while visible and node and node ~= playerGui do
-                    if node:IsA("GuiObject") and not node.Visible then visible = false end
-                    node = node.Parent
-                end
-                if visible then
-                    local text = (obj.Text or ""):gsub("<.->", ""):lower():match("^%s*(.-)%s*$") or ""
-                    for _, itemName in ipairs(items) do
-                        local target = itemName:lower()
-                        if text == target or text:sub(1, #target) == target
-                            or text:find("\n" .. target, 1, true) then
-                            if not table.find(found, itemName) then
-                                table.insert(found, itemName)
-                            end
-                        end
+        local found, foundSet, targets = {}, {}, {}
+        for _, itemName in ipairs(items) do targets[itemName:lower()] = itemName end
+
+        local function scanVisible(node)
+            if node:IsA("ScreenGui") and not node.Enabled then return end
+            if node:IsA("GuiObject") and not node.Visible then return end
+
+            if node:IsA("TextLabel") or node:IsA("TextButton") or node:IsA("TextBox") then
+                local text = (node.Text or ""):gsub("<.->", ""):lower():match("^%s*(.-)%s*$") or ""
+                for target, itemName in pairs(targets) do
+                    if (text == target or text:sub(1, #target) == target
+                        or text:find("\n" .. target, 1, true)) and not foundSet[itemName] then
+                        foundSet[itemName] = true
+                        table.insert(found, itemName)
                     end
                 end
             end
+
+            for _, child in ipairs(node:GetChildren()) do scanVisible(child) end
+        end
+
+        for _, child in ipairs(playerGui:GetChildren()) do
+            scanVisible(child)
         end
         return found
     end
@@ -11278,7 +11287,7 @@ local function activateMerchantPhone(items)
     repeat
         availableItems = getVisibleStockItems()
         if #availableItems > 0 then return availableItems end
-        task.wait(0.25)
+        task.wait(0.75)
     until tick() >= deadline or not Settings.AutoMerchant
 
     if #availableItems == 0 then
