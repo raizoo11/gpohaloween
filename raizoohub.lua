@@ -8414,6 +8414,7 @@ local Fishing = {
     Status = nil,
     ActiveRod = nil,
     SelectedBait = nil,
+    BaitBuyRetryAt = 0,
     MouseHeld = false,
     LastMiniSwitch = 0,
     MiniLastPlayer = nil,
@@ -8935,8 +8936,29 @@ end
 
 function Fishing.buyBaitIfLow()
     if not Settings.AutoBuyBait or not Settings.AutoFishing then return end
+    if tick() < Fishing.BaitBuyRetryAt then return end
     local count = Fishing.baitCount("Common Fish Bait")
     if count == nil or count >= Settings.BaitThreshold then return end
+
+    -- Di pulau fishing utama, dekati titik toko bait dulu sebelum memanggil Shop.
+    if game.PlaceId == 3978370137 then
+        local baitShopSpot = CFrame.new(-1338.5, 4.1, -4980.3)
+        local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+        if (root.Position - baitShopSpot.Position).Magnitude > 6 then
+            Fishing.setStatus("menuju toko bait")
+            local arrived = UI.IslandTravel.moveTo(baitShopSpot, "Toko Bait", function()
+                return Settings.AutoFishing and not Enabled and not UI.IslandTravel.Enabled
+            end)
+            local currentRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if not arrived or not currentRoot or (currentRoot.Position - baitShopSpot.Position).Magnitude > 8 then
+                Fishing.BaitBuyRetryAt = tick() + 10
+                Fishing.setStatus("gagal sampai toko bait")
+                return
+            end
+        end
+    end
+
     local buyables = workspace:FindFirstChild("BuyableItems")
     local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if not buyables or not root then return end
@@ -8948,12 +8970,23 @@ function Fishing.buyBaitIfLow()
             if distance < bestDistance then best, bestDistance = item, distance end
         end
     end
-    if not best then return end
+    if not best then
+        Fishing.BaitBuyRetryAt = tick() + 10
+        Fishing.setStatus("toko Common Fish Bait tidak ditemukan")
+        return
+    end
     local event = ReplicatedStorage:FindFirstChild("Events")
     local shop = event and event:FindFirstChild("Shop")
     if shop and shop:IsA("RemoteFunction") then
         Fishing.setStatus("membeli Common Fish Bait")
-        pcall(function() shop:InvokeServer(best, math.max(1, math.floor(Settings.BaitBuyAmount))) end)
+        local ok, result = PrivateServer.invokeWithTimeout(
+            shop, 5, best, math.max(1, math.floor(Settings.BaitBuyAmount)))
+        Fishing.BaitBuyRetryAt = tick() + (ok and 8 or 20)
+        if not ok then
+            Fishing.setStatus("pembelian bait gagal: " .. tostring(result))
+        end
+    else
+        Fishing.BaitBuyRetryAt = tick() + 10
     end
 end
 
