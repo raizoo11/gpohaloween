@@ -6067,6 +6067,36 @@ function PrivateServer.press(btn)
     return true
 end
 
+-- InvokeServer bisa menunggu tanpa batas jika balasan server macet. Jalankan
+-- request di task terpisah agar loop farm tetap hidup, dengan satu request
+-- aktif per RemoteFunction supaya timeout tidak membuat request menumpuk.
+PrivateServer.PendingRemoteCalls = setmetatable({}, {__mode = "k"})
+function PrivateServer.invokeWithTimeout(remote, timeout, ...)
+    if not remote or not remote:IsA("RemoteFunction") then
+        return false, "RemoteFunction tidak tersedia"
+    end
+    local pending = PrivateServer.PendingRemoteCalls[remote]
+    if pending then return false, "request sebelumnya masih diproses" end
+
+    local args = table.pack(...)
+    local call = {done = false}
+    PrivateServer.PendingRemoteCalls[remote] = call
+    task.spawn(function()
+        local ok, result = pcall(function()
+            return remote:InvokeServer(table.unpack(args, 1, args.n))
+        end)
+        call.ok, call.result, call.done = ok, result, true
+        if PrivateServer.PendingRemoteCalls[remote] == call then
+            PrivateServer.PendingRemoteCalls[remote] = nil
+        end
+    end)
+
+    local deadline = os.clock() + math.max(0.1, timeout or 3)
+    while not call.done and os.clock() < deadline do task.wait(0.05) end
+    if not call.done then return false, "timeout menunggu balasan server" end
+    return call.ok, call.result
+end
+
 -- Satu kali percobaan join. Return: true kalau semua tombol berhasil ditekan
 function PrivateServer.joinOnce()
     local code = PrivateServer.Code
@@ -9667,13 +9697,13 @@ fireGeppoOnce = function()
         local style = stats and stats:FindFirstChild("FightingStyle") and stats.FightingStyle.Value
 
         if style == "Rokushiki" then
-            skill:InvokeServer("Geppo", {char = char, cf = cf})
+            PrivateServer.invokeWithTimeout(skill, 1.5, "Geppo", {char = char, cf = cf})
         elseif style == "BlackLeg" then
-            skill:InvokeServer("Sky Walk", {char = char, cf = cf})
+            PrivateServer.invokeWithTimeout(skill, 1.5, "Sky Walk", {char = char, cf = cf})
         elseif style == "Kamishiki" then
-            skill:InvokeServer("KamishikiGeppo", {char = char, cf = cf})
+            PrivateServer.invokeWithTimeout(skill, 1.5, "KamishikiGeppo", {char = char, cf = cf})
         elseif skills and skills:FindFirstChild("skyWalk") and skills.skyWalk.Value == true then
-            skill:InvokeServer("Sky Walk2", {char = char, cf = cf})
+            PrivateServer.invokeWithTimeout(skill, 1.5, "Sky Walk2", {char = char, cf = cf})
         end
     end)
 end
@@ -10771,11 +10801,13 @@ local function doShopTrip()
         local before = getCandyCount()
         if before and before >= Settings.CandyTarget then
             HalloweenShopStatus("membeli Race Reroll x5")
-            local ok, response = pcall(function()
-                local remote = ReplicatedStorage:WaitForChild("HalloweenShopRemote", 5)
-                if not remote then error("HalloweenShopRemote belum tersedia") end
-                return remote:InvokeServer("Race Reroll x5")
-            end)
+            local remote = ReplicatedStorage:FindFirstChild("HalloweenShopRemote")
+            local ok, response
+            if remote then
+                ok, response = PrivateServer.invokeWithTimeout(remote, 5, "Race Reroll x5")
+            else
+                ok, response = false, "HalloweenShopRemote belum tersedia"
+            end
 
             if ok and response ~= false
                 and not (type(response) == "table" and (response.Success == false or response.Accepted == false)) then
@@ -10802,10 +10834,13 @@ local function doShopTrip()
         if before and before < Settings.CandyTarget then break end
 
         Stat.set("Beli " .. SHOP_ITEM, string.format("pembelian ke-%d  |  candy %s", bought + 1, tostring(before)), "work")
-        local ok, err = pcall(function()
-            local remote = ReplicatedStorage:WaitForChild("HalloweenShopRemote", 5)
-            remote:InvokeServer(SHOP_ITEM)
-        end)
+        local remote = ReplicatedStorage:FindFirstChild("HalloweenShopRemote")
+        local ok, err
+        if remote then
+            ok, err = PrivateServer.invokeWithTimeout(remote, 5, SHOP_ITEM)
+        else
+            ok, err = false, "HalloweenShopRemote belum tersedia"
+        end
 
         if not ok then
             print("[AutoEventDoor] Gagal beli " .. SHOP_ITEM .. ": " .. tostring(err))
@@ -11036,9 +11071,8 @@ function PrivateServer.buyMerchantItem(itemName)
     local directReason = "TravelingMerchentRemote tidak tersedia"
 
     if remote and remote:IsA("RemoteFunction") then
-        local called, response = pcall(function()
-            return remote:InvokeServer(itemName, STOCK_ID, STOCK_GUID)
-        end)
+        local called, response = PrivateServer.invokeWithTimeout(
+            remote, 5, itemName, STOCK_ID, STOCK_GUID)
         if called and response ~= false and not (type(response) == "table"
             and (response.Success == false or response.Accepted == false)) then
             if peliBefore > 0 then
