@@ -8750,18 +8750,21 @@ function Fishing.castByMouse()
     local aimDirection = castTarget - camera.CFrame.Position
     if aimDirection.Magnitude < 0.01 then return false end
 
-    -- Bidik koordinat target dengan posisi mouse di layar; kamera tidak diubah.
-    local point, onScreen = camera:WorldToViewportPoint(castTarget)
-    if not onScreen or point.Z <= 0 then
-        Fishing.setStatus("titik lempar di luar kamera; arahkan pandangan ke air")
-        return false
-    end
-    local x, y = math.floor(point.X + 0.5), math.floor(point.Y + 0.5)
-    VirtualInputManager:SendMouseMoveEvent(x, y, game)
-    VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-    task.wait(1)
-    VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
-    return true
+    -- Kunci sementara ke koordinat lempar, tahan tombol 2 detik, lalu pulihkan
+    -- kamera agar perubahan sudut hanya berlangsung selama cast.
+    local originalCameraCFrame = camera.CFrame
+    local viewport = camera.ViewportSize
+    local x, y = math.floor(viewport.X / 2), math.floor(viewport.Y / 2)
+    local ok = pcall(function()
+        camera.CFrame = CFrame.lookAt(camera.CFrame.Position, castTarget)
+        VirtualInputManager:SendMouseMoveEvent(x, y, game)
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+        task.wait(2)
+        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+    end)
+    pcall(function() VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0) end)
+    if workspace.CurrentCamera == camera then camera.CFrame = originalCameraCFrame end
+    return ok
 end
 
 function Fishing.minigameUI()
