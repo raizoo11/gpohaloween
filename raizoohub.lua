@@ -10949,9 +10949,8 @@ HalloweenShopStatus = function(text)
 end
 
 -- ============ Auto Merchant (Traveling Merchant) ============
--- Status spawn mengikuti NPC Traveling Merchant di workspace.NPCs agar value
--- kompas yang tertinggal setelah despawn tidak membuat MerchantBought terkunci.
--- CompassGuider hanya dipakai bila folder NPC belum direplikasi.
+-- CompassGuider menjadi sumber utama karena NPC hanya direplikasi saat pemain
+-- cukup dekat. NPC di workspace dipakai sebagai fallback bila marker kompas tidak ada.
 
 -- Pembelian dilakukan lewat tombol shop agar game memakai argumen stok/sesi yang aktif.
 local MERCHANT_BUY_CONFIGURED = true
@@ -10971,15 +10970,13 @@ MerchantTarget.Anchored = true
 MerchantTarget.Parent = workspace
 
 local function getMerchantMarker()
-    -- NPC fisik paling akurat untuk status spawn/despawn; compass marker bisa
-    -- tertinggal di ReplicatedStorage setelah merchant pergi.
-    local npcs = workspace:FindFirstChild("NPCs", true)
-    if npcs then return npcs:FindFirstChild("Traveling Merchant") end
-
     local compassGuider = ReplicatedStorage:FindFirstChild("CompassGuider")
     local marker = compassGuider and compassGuider:FindFirstChild("Traveling Merchant")
     if marker then return marker end
-    return nil
+
+    -- Fallback jika CompassGuider belum direplikasi di server ini.
+    local npcs = workspace:FindFirstChild("NPCs", true)
+    return npcs and npcs:FindFirstChild("Traveling Merchant")
 end
 
 local function getMerchantPosition(marker)
