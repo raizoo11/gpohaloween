@@ -8603,33 +8603,22 @@ function Fishing.castGoal(root)
     return point
 end
 
--- Putar avatar ke sisi yang benar-benar punya air di depan spot. Arah badan
--- menjadi sumber arah lempar, tidak tergantung yaw kamera yang menghadap belakang.
+function Fishing.getCastTarget(root)
+    if game.PlaceId == 3978370137 then
+        return Vector3.new(-1336.0, 1.3, -4941.7)
+    end
+    return Fishing.castGoal(root)
+end
+
+-- Putar avatar menuju koordinat jatuh umpan yang dipilih.
 function Fishing.faceWater()
     local character = LocalPlayer.Character
     local root = character and character:FindFirstChild("HumanoidRootPart")
     if not root then return false end
-
-    local directions = {
-        Vector3.new(0, 0, -1), Vector3.new(1, 0, -1), Vector3.new(1, 0, 0),
-        Vector3.new(1, 0, 1), Vector3.new(0, 0, 1), Vector3.new(-1, 0, 1),
-        Vector3.new(-1, 0, 0), Vector3.new(-1, 0, -1),
-    }
-    local bestDirection, bestScore = nil, 0
-    for _, direction in ipairs(directions) do
-        direction = direction.Unit
-        local score = 0
-        for _, distance in ipairs({24, 40}) do
-            local point = root.Position + direction * distance
-            if Fishing.waterY(point, nil) ~= nil then score = score + 1 end
-        end
-        if score > bestScore then
-            bestDirection, bestScore = direction, score
-        end
-    end
-
-    if not bestDirection then return false end
-    root.CFrame = CFrame.lookAt(root.Position, root.Position + bestDirection)
+    local target = Fishing.getCastTarget(root)
+    local direction = Vector3.new(target.X - root.Position.X, 0, target.Z - root.Position.Z)
+    if direction.Magnitude < 0.01 then return false end
+    root.CFrame = CFrame.lookAt(root.Position, root.Position + direction.Unit)
     task.wait(0.1)
     return true
 end
@@ -8757,15 +8746,14 @@ function Fishing.castByMouse()
     local root = character and character:FindFirstChild("HumanoidRootPart")
     if not camera or not root then return false end
 
-    local flatLook = Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z)
-    if flatLook.Magnitude < 0.01 then return false end
-    flatLook = flatLook.Unit
+    local castTarget = Fishing.getCastTarget(root)
+    local aimDirection = castTarget - camera.CFrame.Position
+    if aimDirection.Magnitude < 0.01 then return false end
 
-    -- Lempar lewat ray tengah layar setelah menyamakan yaw kamera dengan badan.
-    -- Posisi mouse lama tidak lagi menentukan arah kail.
+    -- Arahkan ray tengah layar langsung ke koordinat target, tidak mengikuti
+    -- arah kamera sebelumnya atau posisi mouse lama.
     local originalCameraCFrame = camera.CFrame
-    local castDirection = (flatLook - Vector3.new(0, 0.08, 0)).Unit
-    camera.CFrame = CFrame.lookAt(camera.CFrame.Position, camera.CFrame.Position + castDirection)
+    camera.CFrame = CFrame.lookAt(camera.CFrame.Position, castTarget)
     local viewport = camera.ViewportSize
     local x, y = math.floor(viewport.X / 2), math.floor(viewport.Y / 2)
     VirtualInputManager:SendMouseMoveEvent(x, y, game)
