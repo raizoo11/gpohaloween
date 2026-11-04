@@ -8759,7 +8759,7 @@ function Fishing.castByMouse()
     local aimDirection = castTarget - camera.CFrame.Position
     if aimDirection.Magnitude < 0.01 then return false end
 
-    -- Kunci sementara ke koordinat lempar, tahan tombol 2 detik, lalu pulihkan
+    -- Kunci sementara ke koordinat lempar, tahan tombol 4 detik, lalu pulihkan
     -- kamera agar perubahan sudut hanya berlangsung selama cast.
     local originalCameraCFrame = camera.CFrame
     local viewport = camera.ViewportSize
@@ -8768,7 +8768,7 @@ function Fishing.castByMouse()
         camera.CFrame = CFrame.lookAt(camera.CFrame.Position, castTarget)
         VirtualInputManager:SendMouseMoveEvent(x, y, game)
         VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-        task.wait(2)
+        task.wait(4)
         VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
     end)
     pcall(function() VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0) end)
